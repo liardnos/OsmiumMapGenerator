@@ -64,6 +64,9 @@
 
 #include "mat/mat.hpp"
 
+// #include "spatial/UniTreeZone.hpp"
+#include "spatial/UniTree.hpp"
+
 // The type of index used. This must match the include file above
 using index_type = osmium::index::map::FlexMem<osmium::unsigned_object_id_type, osmium::Location>;
 
@@ -75,7 +78,10 @@ public:
     // Segmentd _seg;
     Color _color;
     std::vector<Vector2d> _points;
+    Segmentd _boundingBox;
     std::vector<std::string> _labels;
+
+    bool _drawed = false;
 };
 
 
@@ -101,7 +107,8 @@ std::vector<Match> g_colorVector = {
     {"landuse", "residential", {1., 0., 0., 1.}},
     
     {"water", "basin", {0., 0., 1., 1.}},
-    {"natural", "water", {0.75, 0.75, 0.75, 1.f}},
+    {"natural", "water", {0., 0., 1., 1.}},
+    {"leisure", "swimming_pool", {0., 0., 1., 1.}},
 
     {"leisure", "garden", {0., 1., 0., 1.}},
     {"leisure", "golf_course", {0., 1., 0., 1.}},
@@ -164,23 +171,22 @@ public:
                     }
 
                     seg._color = color;
-                    if (!find) {
-                        std::cout << std::endl;
-                        for (auto &tag : area.tags()) {
-                            std::cout << tag << std::endl;
-                        }
-                    }
+                    // if (!find) {
+                        // std::cout << std::endl;
+                        // for (auto &tag : area.tags()) {
+                        //     std::cout << tag << std::endl;
+                        // }
+                    // }
 
                     auto& ring = static_cast<const osmium::OuterRing&>(item);
 
                     for (auto const &p : ring) {
-                        // Vector2d pos = {p.lon()*cos(p.lat()/180*M_PI), -p.lat()};
                         Vector2d pos = {p.lon(), -p.lat()};
 
-                        if (pos[0] < _boundingBox._p[0]) _boundingBox._p[0] = pos[0];
-                        if (pos[1] < _boundingBox._p[1]) _boundingBox._p[1] = pos[1];
-                        if (pos[0] > _boundingBox._d[0]) _boundingBox._d[0] = pos[0];
-                        if (pos[1] > _boundingBox._d[1]) _boundingBox._d[1] = pos[1];
+                        _boundingBox._p[0] = std::min(pos[0], _boundingBox._p[0]);
+                        _boundingBox._p[1] = std::min(pos[1], _boundingBox._p[1]);
+                        _boundingBox._d[0] = std::max(pos[0], _boundingBox._d[0]);
+                        _boundingBox._d[1] = std::max(pos[1], _boundingBox._d[1]);
 
                         seg._points.push_back(pos);
                     }
@@ -197,7 +203,43 @@ public:
     std::deque<StreeShape> &_segs;
     Segmentd &_boundingBox;
 
-}; // class WKTDump
+};
+
+
+class WKTAreaFinder : public osmium::handler::Handler {
+
+    osmium::geom::WKTFactory<> m_factory;
+
+public:
+
+    WKTAreaFinder(Segmentd &_boundingBox) :
+        osmium::handler::Handler(),
+        _boundingBox(_boundingBox)
+    {}
+
+    // This callback is called by osmium::apply for each area in the data.
+    void area(const osmium::Area& area) {
+        try {
+            std::cout << std::endl;
+            for (auto &tag : area.tags())
+                std::cout << std::string(tag.key()) + "=" + tag.value() << std::endl;
+            for (const auto& item : area) {
+                if (item.type() == osmium::item_type::outer_ring) {
+                    auto& ring = static_cast<const osmium::OuterRing&>(item);
+                    for (auto const &p : ring) {
+                        _boundingBox._p[0] = std::min(p.lon(), _boundingBox._p[0]);
+                        _boundingBox._p[1] = std::min(p.lat(), _boundingBox._p[1]);
+                        _boundingBox._d[0] = std::max(p.lon(), _boundingBox._d[0]);
+                        _boundingBox._d[1] = std::max(p.lat(), _boundingBox._d[1]);
+                    }
+                }
+            }
+        } catch (const osmium::geometry_error& e) {
+            std::cout << "GEOMETRY ERROR: " << e.what() << "\n";
+        }
+    }
+    Segmentd &_boundingBox;
+};
 
 void print_help() {
     std::cout << "osmium_area_test [OPTIONS] OSMFILE\n\n"
@@ -212,65 +254,107 @@ void print_usage(const char* prgname) {
     std::cerr << "Usage: " << prgname << " [OPTIONS] OSMFILE\n";
 }
 
+#define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
+#define PBWIDTH 60
+
+void printProgress(double percentage) {
+    float val = (percentage * 100);
+    percentage = std::min(percentage, 1.0);
+    int lpad = (int) (percentage * PBWIDTH);
+    int rpad = PBWIDTH - lpad;
+    printf("\r%3f2%% [%.*s%*s]", val, lpad, PBSTR, rpad, "");
+    fflush(stdout);
+}
+
 int main(int argc, char* argv[]) {
-    if (argc != 2) {
+    if (argc < 2) {
         print_usage(argv[0]);
         return 1;
     }
+    char const *fileName = 0;
+    if (argc == 2) {
+        fileName = argv[1];
+    } else if (argc == 4) {
+        fileName = argv[2];
+        std::string label = argv[1];
+        std::string key = label.substr(0, label.rfind('='));
+        label = label.substr(label.rfind('=')+1);
 
-    // std::make_unique<strategy_smart::Strategy>(m_extracts, m_options);
+        std::cout << DEBUGVAR(key) << std::endl;
+        std::cout << DEBUGVAR(label) << std::endl;
+
+        Segmentd boundingBox = {{DBL_MAX, DBL_MAX}, {-DBL_MAX, -DBL_MAX}};
+
+
+        osmium::handler::DynamicHandler handler;
+        handler.set<WKTAreaFinder>(boundingBox);
+        osmium::io::File input_file{fileName};
+        osmium::area::Assembler::config_type assembler_config;
+
+        osmium::TagsFilter filter{false};
+        filter.add_rule(true, key, label);
+        // filter.add_rule(true, "landuse", "forest");
+        // filter.add_rule(true, "natural", "wood");
+        osmium::area::MultipolygonManager<osmium::area::Assembler> mp_manager{assembler_config, filter};
+        // osmium::area::MultipolygonManager<osmium::area::Assembler> mp_manager{assembler_config};
+
+        std::cerr << "Pass 1...\n";
+        osmium::relations::read_relations(input_file, mp_manager);
+        std::cerr << "Pass 1 done\n";
+
+        index_type index;
+        location_handler_type location_handler{index};
+
+        location_handler.ignore_errors();
+
+        std::cerr << "Pass 2...\n";
+        osmium::io::Reader reader{input_file};
+        osmium::apply(reader, location_handler, mp_manager.handler([&handler](osmium::memory::Buffer&& buffer) {
+            osmium::apply(buffer, handler);
+        }));
+        reader.close();
+        std::cerr << "Pass 2 done\n";
+
+        fileName = strdup((label + std::string(".osm.pbf")).c_str());
+        std::cout << fileName << std::endl;
+        std::cout << DEBUGVAR(boundingBox) << std::endl;
+        std::string cmd = std::string("osmium extract --bbox ")+std::to_string(boundingBox._p[0])+","+std::to_string(boundingBox._p[1])+","+std::to_string(boundingBox._d[0])+","+std::to_string(boundingBox._d[1])+" "+argv[3]+" -o "+fileName+ " --overwrite";
+        std::cout << DEBUGVAR(cmd) << std::endl;
+        system(cmd.c_str());
+
+    } else if (argc == 6) {
+        fileName = "tmp.osm.pbf";
+
+        std::string cmd = std::string("osmium extract --bbox ")+argv[1]+","+argv[2] +","+ argv[3] +","+ argv[4]+" "+argv[5]+" -o "+fileName+ " --overwrite";
+        std::cout << DEBUGVAR(cmd) << std::endl;
+        system(cmd.c_str());
+    }
 
     try {
         std::deque<StreeShape> segs;
         Segmentd boundingBox = {{DBL_MAX, DBL_MAX}, {-DBL_MAX, -DBL_MAX}};
 
-        // Initialize an empty DynamicHandler. Later it will be associated
-        // with one of the handlers. You can think of the DynamicHandler as
-        // a kind of "variant handler" or a "pointer handler" pointing to the
-        // real handler.
         osmium::handler::DynamicHandler handler;
-
         handler.set<WKTDump>(segs, boundingBox);
-
-        osmium::io::File input_file{argv[1]};
-
-        // Configuration for the multipolygon assembler. Here the default settings
-        // are used, but you could change multiple settings.
+        osmium::io::File input_file{fileName};
         osmium::area::Assembler::config_type assembler_config;
 
         // osmium::TagsFilter filter{false};
+        // filter.add_rule(true, "name", "Pont-à-Marcq");
         // filter.add_rule(true, "landuse", "forest");
         // filter.add_rule(true, "natural", "wood");
         // osmium::area::MultipolygonManager<osmium::area::Assembler> mp_manager{assembler_config, filter};
         osmium::area::MultipolygonManager<osmium::area::Assembler> mp_manager{assembler_config};
 
-        // We read the input file twice. In the first pass, only relations are
-        // read and fed into the multipolygon manager.
         std::cerr << "Pass 1...\n";
         osmium::relations::read_relations(input_file, mp_manager);
         std::cerr << "Pass 1 done\n";
 
-        // Output the amount of main memory used so far. All multipolygon relations
-        // are in memory now.
-        std::cerr << "Memory:\n";
-        osmium::relations::print_used_memory(std::cerr, mp_manager.used_memory());
-
-        // The index storing all node locations.
         index_type index;
-
-        // The handler that stores all node locations in the index and adds them
-        // to the ways.
         location_handler_type location_handler{index};
 
-        // If a location is not available in the index, we ignore it. It might
-        // not be needed (if it is not part of a multipolygon relation), so why
-        // create an error?
         location_handler.ignore_errors();
 
-        // On the second pass we read all objects and run them first through the
-        // node location handler and then the multipolygon collector. The collector
-        // will put the areas it has created into the "buffer" which are then
-        // fed through our "handler".
         std::cerr << "Pass 2...\n";
         osmium::io::Reader reader{input_file};
         osmium::apply(reader, location_handler, mp_manager.handler([&handler](osmium::memory::Buffer&& buffer) {
@@ -280,65 +364,103 @@ int main(int argc, char* argv[]) {
         std::cerr << "Pass 2 done\n";
 
 
-        // Output the amount of main memory used so far. All complete multipolygon
-        // relations have been cleaned up.
-        std::cerr << "Memory:\n";
-        osmium::relations::print_used_memory(std::cerr, mp_manager.used_memory());
 
-        // If there were multipolgyon relations in the input, but some of their
-        // members are not in the input file (which often happens for extracts)
-        // this will write the IDs of the incomplete relations to stderr.
-        std::vector<osmium::object_id_type> incomplete_relations_ids;
-        mp_manager.for_each_incomplete_relation([&](const osmium::relations::RelationHandle& handle){
-            incomplete_relations_ids.push_back(handle->id());
-        });
-        if (!incomplete_relations_ids.empty()) {
-            std::cerr << "Warning! Some member ways missing for these multipolygon relations:";
-            for (const auto id : incomplete_relations_ids) {
-                std::cerr << " " << id;
-            }
-            std::cerr << "\n";
-        }
 
 
         std::cout << DEBUGVAR(boundingBox) << std::endl;
         boundingBox._d -= boundingBox._p;
 
         Vector2d center = boundingBox._p+boundingBox._d/2;
+        std::cout << DEBUGVAR(boundingBox) << std::endl;
 
-        // do projection and update bounding box
+        // do projection && update bounding box
         boundingBox = {{DBL_MAX, DBL_MAX}, {-DBL_MAX, -DBL_MAX}};
         for (auto &shape : segs) {
             for (auto &p : shape._points) {
-                p[0] -= center[0];
                 p[0] *= cos(p[1]/180*M_PI);
 
-                if (p[0] < boundingBox._p[0]) boundingBox._p[0] = p[0];
-                if (p[1] < boundingBox._p[1]) boundingBox._p[1] = p[1];
-                if (p[0] > boundingBox._d[0]) boundingBox._d[0] = p[0];
-                if (p[1] > boundingBox._d[1]) boundingBox._d[1] = p[1];
+                boundingBox._p[0] = std::min(p[0], boundingBox._p[0]);
+                boundingBox._p[1] = std::min(p[1], boundingBox._p[1]);
+                boundingBox._d[0] = std::max(p[0], boundingBox._d[0]);
+                boundingBox._d[1] = std::max(p[1], boundingBox._d[1]);
             }
         }
         boundingBox._d -= boundingBox._p;
+        center = boundingBox._p+boundingBox._d/2;
 
-
-
-
-        // center and scale
-        double scale = 800/std::max(boundingBox._d[0], boundingBox._d[1]);
-        std::cout << DEBUGVAR(boundingBox) << std::endl;
+        // center points && scale to meters && update bounding box
         for (auto &shape : segs) {
             for (auto &p : shape._points) {
-                p = (p-boundingBox._p)*scale;
+                p -= center;
+                p *= 111194.0;
+
+                boundingBox._p[0] = std::min(p[0], boundingBox._p[0]);
+                boundingBox._p[1] = std::min(p[1], boundingBox._p[1]);
+                boundingBox._d[0] = std::max(p[0], boundingBox._d[0]);
+                boundingBox._d[1] = std::max(p[1], boundingBox._d[1]);
             }
         }
+        boundingBox._d -= boundingBox._p;
+        center = boundingBox._p+boundingBox._d/2;
+
+        // calculate shapes bounding box
+        for (auto &shape : segs) {
+            shape._boundingBox = {DBL_MAX, DBL_MAX, DBL_MIN, DBL_MIN};
+            for (auto &p : shape._points) {
+                shape._boundingBox._p[0] = std::min(p[0], shape._boundingBox._p[0]);
+                shape._boundingBox._p[1] = std::min(p[1], shape._boundingBox._p[1]);
+                shape._boundingBox._d[0] = std::max(p[0], shape._boundingBox._d[0]);
+                shape._boundingBox._d[1] = std::max(p[1], shape._boundingBox._d[1]);
+            }
+        }        
+
+        class UniTreeObj : public Vector2d {
+            public:
+            UniTreeObj(Vector2d const &vec, StreeShape &shape) : 
+                Vector2d(vec),
+                _shape(shape)
+            {
+                // std::cout << DEBUGVAR(data[0]) << std::endl;
+                // std::cout << DEBUGVAR(data[1]) << std::endl;
+            }
+
+            StreeShape &_shape;
+        };
+
+
+        
+
+        // Zone<double, 2> zone(boundingBox._p+boundingBox._d/2, boundingBox._d/2);
+
+        // fill UniTreeZone
+        auto treeZone = std::make_unique<UniTree<UniTreeObj, Vector2d, 2>>(boundingBox._p+boundingBox._d/2, boundingBox._d/2);
+
+        std::vector<UniTreeObj> UniTreeObjects;
+        uint allocSize = 0;
+        for (StreeShape &shape : segs)
+            allocSize += shape._points.size();
+        std::cout << DEBUGVAR(allocSize) << std::endl;
+        UniTreeObjects.reserve(allocSize);
+        uint currentSize = 0;
+        std::cout << "building map..." << std::endl;
+        for (StreeShape &shape : segs) {
+            for (Vector2d const &p : shape._points) {
+                UniTreeObjects.emplace_back(p+Vector2d{rand()/(double)INT_MAX, rand()/(double)INT_MAX}, shape);
+                treeZone->addData(&UniTreeObjects.back());
+                currentSize += 1;
+            }
+            printProgress(currentSize/(float)allocSize);
+        }
+
+
 
         std::cout << DEBUGVAR(segs.size()) << std::endl;
         Vector2f _cameraOffset = {0, 0};
         float _cameraAngle = 0;
         Mat3 _matWorld;
         Mat3 _matWorldInv;
-        float _camScale = 1;
+        float _camScale = 1;//1./800/std::max(boundingBox._d[0], boundingBox._d[1]);
+
 
         sf::RenderWindow win(sf::VideoMode(800, 800), "Map Gen");
         win.setFramerateLimit(60);
@@ -351,8 +473,12 @@ int main(int argc, char* argv[]) {
         text.setCharacterSize(textSize);
         text.setFillColor(sf::Color::White);
 
+        bool displayLabel = false;
+
+        std::shared_ptr<std::vector<UniTreeObj *>> uniTreeBuffer = std::make_shared<std::vector<UniTreeObj*>>();
         while (win.isOpen()) {
             win.clear();
+
 
             float camcos = -cos(-_cameraAngle) * 1.0/_camScale*8;
             float camsin = -sin(-_cameraAngle) * 1.0/_camScale*8;
@@ -372,8 +498,13 @@ int main(int argc, char* argv[]) {
             while (win.pollEvent(event)) {
                 if (event.type == sf::Event::Closed) {
                     win.close();
+                } else if (event.type == sf::Event::KeyPressed) {
+                    if (event.key.code == sf::Keyboard::L) {
+                        displayLabel = !displayLabel;
+                    }
                 }
             }
+
 
 
             Mat3 matrix;
@@ -384,10 +515,27 @@ int main(int argc, char* argv[]) {
             _matWorld = matrix;
             _matWorldInv = matrix.inv();
 
-            
+            Vector2d p1 = (_matWorldInv * Vector2f{-400, -400}).cast<double>();
+            Vector2d p2 = (_matWorldInv * Vector2f{400, 400}).cast<double>();
+            Vector2d center = (p1+p2)/2;
+            double len = std::abs((p1-p2).length())/2;
+            Vector2d size = {len, len};
 
+            uniTreeBuffer->clear();
+            treeZone->getInArea(center, size, uniTreeBuffer);
+            
+            std::cout << DEBUGVAR(uniTreeBuffer->size()) << std::endl;
+            // int shapeDraw = 1024*256;
             uint maxTextDraw = 16;
-            for (auto &shape : segs) {
+            for (auto &obj : *uniTreeBuffer) {
+                auto &shape = obj->_shape;
+                if (shape._drawed)
+                    continue;
+                shape._drawed = true;
+                // shapeDraw -= shape._points.size();
+                // if (shapeDraw <= 0) {
+                //     break;
+                // }
                 sf::VertexArray lines(sf::LineStrip, shape._points.size());
                 uint i = 0;
                 for (auto &p : shape._points) {
@@ -399,16 +547,20 @@ int main(int argc, char* argv[]) {
                 win.draw(lines);
 
                 Vector2f p1 = _matWorld * shape._points[0].cast<float>() + 800/2;
-                if (shape._labels.size() && maxTextDraw > 0 && 0 <= p1[0] && p1[0] < 800 && 0 <= p1[1] && p1[1] < 800) {
-                    --maxTextDraw;
-                    text.setPosition(p1[0], p1[1]);
-                    for (std::string const &string : shape._labels) {
-                        text.setString(string);
-                        win.draw(text);
-                        text.move({0, textSize*1.1});
+                
+                if (displayLabel)
+                    if (shape._labels.size() && maxTextDraw > 0 && 0 <= p1[0] && p1[0] < 800 && 0 <= p1[1] && p1[1] < 800) {
+                        --maxTextDraw;
+                        text.setPosition(p1[0], p1[1]);
+                        for (std::string const &string : shape._labels) {
+                            text.setString(string);
+                            win.draw(text);
+                            text.move({0, textSize*1.1});
+                        }
                     }
-                }
             }
+            for (auto &obj : *uniTreeBuffer)
+                obj->_shape._drawed = false;
             win.display();
         }
 
