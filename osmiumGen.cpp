@@ -57,8 +57,13 @@
 #include <SFML/Graphics.hpp>
 
 #include <deque>
+#include <vector>
 
 #include <float.h>
+
+#include <fstream>
+
+#include "ByteObject.hpp"
 
 #include "utils.hpp"
 
@@ -76,12 +81,30 @@ using location_handler_type = osmium::handler::NodeLocationsForWays<index_type>;
 class StreeShape {
 public:
     // Segmentd _seg;
-    Color _color;
+    sf::Color _color;
     std::vector<Vector2d> _points;
-    Segmentd _boundingBox;
     std::vector<std::string> _labels;
-
     bool _drawed = false;
+
+    friend ByteObject &operator<<(ByteObject &obj, StreeShape const &shape) {
+        std::vector<Vector2f> vec;
+        vec.reserve(shape._points.size());
+        for (Vector2d const &p : shape._points)
+            vec.push_back(p.cast<float>());
+
+        obj << shape._color << vec << shape._labels;
+        return obj;
+    }
+
+    friend ByteObject &operator>>(ByteObject &obj, StreeShape &shape) {
+        std::vector<Vector2f> vec;
+        obj >> shape._color >> vec >> shape._labels;
+        shape._points.clear();
+        shape._points.reserve(vec.size());
+        for (Vector2f const &p : vec)
+            shape._points.push_back(p.cast<double>());
+        return obj;
+    }
 };
 
 
@@ -93,7 +116,7 @@ public:
 };
 
 std::vector<Match> g_colorVector = {
-    {"wall", "no", {0.25, 0.25, 0.25, 1.}},
+    {"wall", "no",  {0.25, 0.25, 0.25, 1.}},
     {"amenity", "parking_space", {0.25, 0.25, 0.25, 1.}},
 
     {"amenity", "parking", {0.5, 0.25, 0.25, 1.}},
@@ -112,7 +135,9 @@ std::vector<Match> g_colorVector = {
 
     {"leisure", "garden", {0., 1., 0., 1.}},
     {"leisure", "golf_course", {0., 1., 0., 1.}},
+    {"leisure", "park", {0., 1., 0., 1.}},
     {"landuse", "grass", {0., 1., 0., 1.}},
+    {"landuse", "village_green", {0., 1., 0., 1.}},
     
     {"landuse", "meadow", {0., 0.75, 0., 1.}},
     {"landuse", "vineyard", {0., 0.75, 0., 1.}},
@@ -136,13 +161,11 @@ class WKTDump : public osmium::handler::Handler {
 
 public:
 
-    WKTDump(std::deque<StreeShape> &segs, Segmentd &boundingBox) :
+    WKTDump(std::vector<StreeShape> &segs, Segmentd &boundingBox) :
         osmium::handler::Handler(),
         _segs(segs),
         _boundingBox(boundingBox)
-    {
-
-    }
+    {}
 
     // This callback is called by osmium::apply for each area in the data.
     void area(const osmium::Area& area) {
@@ -170,7 +193,7 @@ public:
                         }
                     }
 
-                    seg._color = color;
+                    seg._color = {(uint8_t)(color.r*255), (uint8_t)(color.g*255), (uint8_t)(color.b*255), (uint8_t)(color.a*255)};
                     // if (!find) {
                         // std::cout << std::endl;
                         // for (auto &tag : area.tags()) {
@@ -191,6 +214,11 @@ public:
                         seg._points.push_back(pos);
                     }
                     _segs.push_back(seg);
+
+                    if (!(_segs.size() % 1024)) {
+                        printf("\r%li ", _segs.size());
+                        fflush(stdout);
+                    }
                 }
             }
 
@@ -200,7 +228,7 @@ public:
         }
     }
 
-    std::deque<StreeShape> &_segs;
+    std::vector<StreeShape> &_segs;
     Segmentd &_boundingBox;
 
 };
@@ -264,6 +292,15 @@ void printProgress(double percentage) {
     int rpad = PBWIDTH - lpad;
     printf("\r%3f2%% [%.*s%*s]", val, lpad, PBSTR, rpad, "");
     fflush(stdout);
+}
+
+long int fsize(const char *filename) {
+    struct stat st; 
+    if (stat(filename, &st) == 0) {
+        std::cout << filename << " file size = " << st.st_size << std::endl;
+        return st.st_size;
+    }
+    return -1; 
 }
 
 int main(int argc, char* argv[]) {
@@ -331,7 +368,7 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        std::deque<StreeShape> segs;
+        std::vector<StreeShape> segs;
         Segmentd boundingBox = {{DBL_MAX, DBL_MAX}, {-DBL_MAX, -DBL_MAX}};
 
         osmium::handler::DynamicHandler handler;
@@ -360,6 +397,8 @@ int main(int argc, char* argv[]) {
         osmium::apply(reader, location_handler, mp_manager.handler([&handler](osmium::memory::Buffer&& buffer) {
             osmium::apply(buffer, handler);
         }));
+
+        std::cout << "\r" << segs.size() << " areas found" << std::endl;
         reader.close();
         std::cerr << "Pass 2 done\n";
 
@@ -404,15 +443,15 @@ int main(int argc, char* argv[]) {
         center = boundingBox._p+boundingBox._d/2;
 
         // calculate shapes bounding box
-        for (auto &shape : segs) {
-            shape._boundingBox = {DBL_MAX, DBL_MAX, DBL_MIN, DBL_MIN};
-            for (auto &p : shape._points) {
-                shape._boundingBox._p[0] = std::min(p[0], shape._boundingBox._p[0]);
-                shape._boundingBox._p[1] = std::min(p[1], shape._boundingBox._p[1]);
-                shape._boundingBox._d[0] = std::max(p[0], shape._boundingBox._d[0]);
-                shape._boundingBox._d[1] = std::max(p[1], shape._boundingBox._d[1]);
-            }
-        }        
+        // for (auto &shape : segs) {
+        //     shape._boundingBox = {DBL_MAX, DBL_MAX, DBL_MIN, DBL_MIN};
+        //     for (auto &p : shape._points) {
+        //         shape._boundingBox._p[0] = std::min(p[0], shape._boundingBox._p[0]);
+        //         shape._boundingBox._p[1] = std::min(p[1], shape._boundingBox._p[1]);
+        //         shape._boundingBox._d[0] = std::max(p[0], shape._boundingBox._d[0]);
+        //         shape._boundingBox._d[1] = std::max(p[1], shape._boundingBox._d[1]);
+        //     }
+        // }        
 
         class UniTreeObj : public Vector2d {
             public:
@@ -442,10 +481,11 @@ int main(int argc, char* argv[]) {
         std::cout << DEBUGVAR(allocSize) << std::endl;
         UniTreeObjects.reserve(allocSize);
         uint currentSize = 0;
+        srand(14);
         std::cout << "building map..." << std::endl;
         for (StreeShape &shape : segs) {
             for (Vector2d const &p : shape._points) {
-                UniTreeObjects.emplace_back(p+Vector2d{rand()/(double)INT_MAX, rand()/(double)INT_MAX}, shape);
+                UniTreeObjects.emplace_back(p+Vector2d{rand()/(double)INT_MAX/100, rand()/(double)INT_MAX/100}, shape); // TODO this is bad
                 treeZone->addData(&UniTreeObjects.back());
                 currentSize += 1;
             }
@@ -454,15 +494,15 @@ int main(int argc, char* argv[]) {
 
 
 
-        std::cout << DEBUGVAR(segs.size()) << std::endl;
         Vector2f _cameraOffset = {0, 0};
         float _cameraAngle = 0;
         Mat3 _matWorld;
         Mat3 _matWorldInv;
-        float _camScale = 1;//1./800/std::max(boundingBox._d[0], boundingBox._d[1]);
+        float _camScale = 1;//1./winSize[0]/std::max(boundingBox._d[0], boundingBox._d[1]);
 
+        Vector2i winSize = {800, 800};
 
-        sf::RenderWindow win(sf::VideoMode(800, 800), "Map Gen");
+        sf::RenderWindow win(sf::VideoMode(winSize[0], winSize[1]), "Map Gen");
         win.setFramerateLimit(60);
 
         sf::Font font;
@@ -494,6 +534,14 @@ int main(int argc, char* argv[]) {
             sf::Keyboard::isKeyPressed(sf::Keyboard::E) ? _camScale *= 1.02 : 0;
             sf::Keyboard::isKeyPressed(sf::Keyboard::Q) ? _camScale *= 0.98 : 0;
 
+            Vector2f mousePos;
+            {
+                sf::Vector2i vec = sf::Mouse::getPosition(win);
+                mousePos = {(float)vec.x, (float)vec.y};
+            }
+            Vector2f mousePosCenterRelative = mousePos-winSize.cast<float>()/2;
+
+
             sf::Event event;
             while (win.pollEvent(event)) {
                 if (event.type == sf::Event::Closed) {
@@ -501,6 +549,58 @@ int main(int argc, char* argv[]) {
                 } else if (event.type == sf::Event::KeyPressed) {
                     if (event.key.code == sf::Keyboard::L) {
                         displayLabel = !displayLabel;
+                    } else if (event.key.code == sf::Keyboard::M) {
+                        std::cout << "save..." << std::endl;
+                        ByteObject obj;
+                        // size_t size = segs.size();
+                        obj << segs;
+
+                        std::ofstream file("map.bmap");
+                        file << obj;
+                        std::cout << "save...ok" << std::endl;
+                    } else if (event.key.code == sf::Keyboard::N) {
+                        // segs.clear();
+                        UniTreeObjects.clear();
+
+                        std::ifstream file("map.bmap");
+
+                        ByteObject obj;
+                        file >> obj;
+
+                        obj >> segs;
+
+
+                        // center points && scale to meters && update bounding box
+                        for (auto &shape : segs) {
+                            for (auto &p : shape._points) {
+                                boundingBox._p[0] = std::min(p[0], boundingBox._p[0]);
+                                boundingBox._p[1] = std::min(p[1], boundingBox._p[1]);
+                                boundingBox._d[0] = std::max(p[0], boundingBox._d[0]);
+                                boundingBox._d[1] = std::max(p[1], boundingBox._d[1]);
+                            }
+                        }
+                        boundingBox._d -= boundingBox._p;
+                        center = boundingBox._p+boundingBox._d/2;
+
+                        treeZone = std::make_unique<UniTree<UniTreeObj, Vector2d, 2>>(boundingBox._p+boundingBox._d/2, boundingBox._d/2);
+
+
+                        uint allocSize = 0;
+                        for (StreeShape &shape : segs)
+                            allocSize += shape._points.size();
+                        std::cout << DEBUGVAR(allocSize) << std::endl;
+                        UniTreeObjects.reserve(allocSize);
+                        uint currentSize = 0;
+                        std::cout << "building map..." << std::endl;
+                        srand(14);
+                        for (StreeShape &shape : segs) {
+                            for (Vector2d const &p : shape._points) {
+                                UniTreeObjects.emplace_back(p+Vector2d{rand()/(double)INT_MAX/100, rand()/(double)INT_MAX/100}, shape); // TODO this is bad
+                                treeZone->addData(&UniTreeObjects.back());
+                                currentSize += 1;
+                            }
+                            printProgress(currentSize/(float)allocSize);
+                        }
                     }
                 }
             }
@@ -512,44 +612,69 @@ int main(int argc, char* argv[]) {
             matrix.ty(_cameraOffset[1]);
             matrix.rrz(_cameraAngle);
             matrix.scale(_camScale);
+            matrix.ttx(-mousePosCenterRelative[0]*0.5);
+            matrix.tty(-mousePosCenterRelative[1]*0.5);
             _matWorld = matrix;
             _matWorldInv = matrix.inv();
 
-            Vector2d p1 = (_matWorldInv * Vector2f{-400, -400}).cast<double>();
-            Vector2d p2 = (_matWorldInv * Vector2f{400, 400}).cast<double>();
-            Vector2d center = (p1+p2)/2;
-            double len = std::abs((p1-p2).length())/2;
-            Vector2d size = {len, len};
+            sf::CircleShape ship;
+            ship.setFillColor(sf::Color::Red);
+            ship.setRadius(_camScale*1);
+            ship.setPosition(-mousePosCenterRelative[0]*0.8+winSize[0]/2, -mousePosCenterRelative[1]*0.8+winSize[1]/2);
+
+            win.draw(ship);
+
+            Vector2d p1 = (_matWorldInv * (winSize.cast<float>()*Vector2f{-1, -1})/2).cast<double>();  
+            Vector2d p2 = (_matWorldInv * (winSize.cast<float>()*Vector2f{-1,  1})/2).cast<double>();
+            Vector2d p3 = (_matWorldInv * (winSize.cast<float>()*Vector2f{ 1, -1})/2).cast<double>();
+            Vector2d p4 = (_matWorldInv * (winSize.cast<float>()*Vector2f{ 1,  1})/2).cast<double>();
+            Vector2d center = (p1+p4);
+
+            Segmentd cameraBoundingBox = {
+                std::min(std::min(p1[0], p2[0]), std::min(p3[0], p4[0])),
+                std::min(std::min(p1[1], p2[1]), std::min(p3[1], p4[1])),
+                std::max(std::max(p1[0], p2[0]), std::max(p3[0], p4[0])),
+                std::max(std::max(p1[1], p2[1]), std::max(p3[1], p4[1])),
+            };
+            cameraBoundingBox._d -= cameraBoundingBox._p;
+
+            Vector2d size = cameraBoundingBox._d/2;
 
             uniTreeBuffer->clear();
             treeZone->getInArea(center, size, uniTreeBuffer);
             
-            std::cout << DEBUGVAR(uniTreeBuffer->size()) << std::endl;
+
+
+            // uint allVertexCursor = 0;
             // int shapeDraw = 1024*256;
             uint maxTextDraw = 16;
+
+            Vector2f winSizef = winSize.cast<float>()/2; 
             for (auto &obj : *uniTreeBuffer) {
                 auto &shape = obj->_shape;
-                if (shape._drawed)
-                    continue;
+                if (shape._drawed)  
+                        continue;
                 shape._drawed = true;
+
+                // display individual
                 // shapeDraw -= shape._points.size();
                 // if (shapeDraw <= 0) {
                 //     break;
                 // }
                 sf::VertexArray lines(sf::LineStrip, shape._points.size());
-                uint i = 0;
+                uint i = 0;  
                 for (auto &p : shape._points) {
-                    Vector2f p1 = _matWorld * p.cast<float>() + 800/2;
-                    lines[i] = sf::Vertex(sf::Vector2f(p1[0], p1[1]), {(uint8_t)(shape._color.r*255), (uint8_t)(shape._color.g*255), (uint8_t)(shape._color.b*255), (uint8_t)(shape._color.a*255)}),
+                    Vector2f p1 = _matWorld * p.cast<float>() + winSizef;
+                    lines[i] = sf::Vertex(sf::Vector2f(p1[0], p1[1]), shape._color);
                     ++i;
                 }
 
                 win.draw(lines);
 
-                Vector2f p1 = _matWorld * shape._points[0].cast<float>() + 800/2;
-                
-                if (displayLabel)
-                    if (shape._labels.size() && maxTextDraw > 0 && 0 <= p1[0] && p1[0] < 800 && 0 <= p1[1] && p1[1] < 800) {
+           
+                if (displayLabel) {
+                    Vector2f p1 = _matWorld * shape._points[0].cast<float>() + winSize.cast<float>()/2;
+                    if (shape._labels.size() && maxTextDraw > 0 && 0 <= p1[0] && p1[0] < winSize[0] && 0 <= p1[1] && p1[1] < winSize[1]) {
                         --maxTextDraw;
                         text.setPosition(p1[0], p1[1]);
                         for (std::string const &string : shape._labels) {
@@ -558,6 +683,7 @@ int main(int argc, char* argv[]) {
                             text.move({0, textSize*1.1});
                         }
                     }
+                }
             }
             for (auto &obj : *uniTreeBuffer)
                 obj->_shape._drawed = false;
