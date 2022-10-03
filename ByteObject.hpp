@@ -15,8 +15,13 @@
 #include <string>
 #include <ostream>
 #include <exception>
-#include <unistd.h>
 #include <iostream>
+
+#if _WIN32
+//#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 #ifdef _WIN32 
 typedef unsigned int uint;
@@ -74,7 +79,7 @@ public:
 
     template <typename T>
     ByteObject &operator<<(std::vector<T> const &thing) {
-        std::size_t size = thing.size();
+        uint32_t size = thing.size();
         *this << size;
         for (T const &v : thing)
             *this << v;
@@ -82,7 +87,7 @@ public:
     };
 
     ByteObject &operator<<(std::string const &thing) {
-        std::size_t size = thing.size();
+        uint32_t size = thing.size();
         *this << size;
         _data.resize(_size + size);
         memcpy(&_data[_size], &thing[0], size);
@@ -100,7 +105,7 @@ public:
 
     template <typename T>
     ByteObject &operator>>(std::vector<T> &thing) {
-        std::size_t size;
+        uint32_t size;
         *this >> size;
         thing.resize(size);
         for (T &v : thing)
@@ -109,7 +114,7 @@ public:
     };
 
     ByteObject &operator>>(std::string &thing) {
-        std::size_t size;
+        uint32_t size;
         *this >> size;
         thing.resize(size);
         //if (_cursor + size*1 > _size)

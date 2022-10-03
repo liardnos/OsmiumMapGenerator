@@ -5,7 +5,7 @@ SRC = osmiumGen.cpp mat/mat.cpp ByteObject.cpp
 FLAGS = -lz -lbz2 -lpthread -lexpat -Wall -Wextra -lm -lsfml-graphics -lsfml-window -lsfml-system
 
 all:
-	g++ $(SRC) $(FLAGS) -O4 -o $(NAME)
+	g++ $(SRC) $(FLAGS) -g -o $(NAME)
 
 run: all
 	./$(NAME) ~/openStreetMap/pont-a-marq.osm

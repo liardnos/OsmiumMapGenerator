@@ -485,7 +485,7 @@ int main(int argc, char* argv[]) {
         std::cout << "building map..." << std::endl;
         for (StreeShape &shape : segs) {
             for (Vector2d const &p : shape._points) {
-                UniTreeObjects.emplace_back(p+Vector2d{rand()/(double)INT_MAX/100, rand()/(double)INT_MAX/100}, shape); // TODO this is bad
+                UniTreeObjects.emplace_back(p+Vector2d{(currentSize%2+1)*1./10000*currentSize, (currentSize%2+0)*1./10000*currentSize}, shape); // TODO this is bad, I need to make a new spatialisation tool
                 treeZone->addData(&UniTreeObjects.back());
                 currentSize += 1;
             }
@@ -551,18 +551,48 @@ int main(int argc, char* argv[]) {
                         displayLabel = !displayLabel;
                     } else if (event.key.code == sf::Keyboard::M) {
                         std::cout << "save..." << std::endl;
-                        ByteObject obj;
-                        // size_t size = segs.size();
-                        obj << segs;
+                        
+                        struct QuickMatch {
+                            char const *key;
+                            char const *value;
+                        };
 
-                        std::ofstream file("map.bmap");
+                        std::vector<QuickMatch> toKeep = {
+                            {"building", 0},
+                        };
+
+                        std::vector<StreeShape> toSave;
+                        toSave.reserve(segs.size());
+                        for (StreeShape &shape : segs) {
+                            bool keep = false;
+                            for (std::string const &s : shape._labels) {
+                                std::string key = s.substr(0, s.rfind('='));
+                                std::string value = s.substr(s.rfind('=')+1);
+                                for (QuickMatch const &ss : toKeep) {
+                                    if (key == ss.key && (ss.value == 0 || value == ss.value)) {
+                                        keep = true;
+                                        goto keepIt;
+                                    }
+                                }
+                            }
+                            if (0) {
+                                keepIt:
+                                toSave.emplace_back(shape);
+                            }
+                        }
+
+                        ByteObject obj;
+                        obj << toSave;
+
+                        std::ofstream file("../BoatFight/map.bmap", std::fstream::binary);
                         file << obj;
                         std::cout << "save...ok" << std::endl;
+
                     } else if (event.key.code == sf::Keyboard::N) {
                         // segs.clear();
                         UniTreeObjects.clear();
 
-                        std::ifstream file("map.bmap");
+                        std::ifstream file("../BoatFight/map.bmap", std::ifstream::binary);
 
                         ByteObject obj;
                         file >> obj;
@@ -570,7 +600,7 @@ int main(int argc, char* argv[]) {
                         obj >> segs;
 
 
-                        // center points && scale to meters && update bounding box
+                        // update bounding box
                         for (auto &shape : segs) {
                             for (auto &p : shape._points) {
                                 boundingBox._p[0] = std::min(p[0], boundingBox._p[0]);
@@ -595,7 +625,8 @@ int main(int argc, char* argv[]) {
                         srand(14);
                         for (StreeShape &shape : segs) {
                             for (Vector2d const &p : shape._points) {
-                                UniTreeObjects.emplace_back(p+Vector2d{rand()/(double)INT_MAX/100, rand()/(double)INT_MAX/100}, shape); // TODO this is bad
+                                UniTreeObjects.emplace_back(p+Vector2d{(currentSize%2+1)*1./10000*currentSize, (currentSize%2+0)*1./10000*currentSize}, shape); // TODO this is bad, I need to make a new spatialisation tool
+
                                 treeZone->addData(&UniTreeObjects.back());
                                 currentSize += 1;
                             }
