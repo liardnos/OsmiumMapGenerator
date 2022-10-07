@@ -98,7 +98,10 @@ public:
     template <typename T>
     ByteObject &operator<<(T const &thing) {
         _data.resize(_size + sizeof(T));
-        memcpy(&_data[_size], &thing, sizeof(T));
+
+        T *ptr = (T *)&_data[_size];
+        *ptr = thing;
+        // memcpy(&_data[_size], &thing, sizeof(T));
         _size += sizeof(T);
         return *this;
     };
@@ -128,7 +131,9 @@ public:
     ByteObject &operator>>(T &thing) {
         //if (_cursor + sizeof(T) > _size)
         //    throw ByteObjectError("ByteObject operator>> out of bound" + DEBUGINFORMATION);
-        memcpy(&thing, &_data[_cursor] , sizeof(T));
+        T *ptr = (T *)&_data[_cursor];
+        thing = *ptr;
+        // memcpy(&thing, &_data[_cursor] , sizeof(T));
         _cursor += sizeof(T);
         return *this;
     };
@@ -145,6 +150,7 @@ public:
     void clear() {
         _cursor = 0;
         _size = 0;
+        _data.clear();
     }
 
     std::vector<uint8_t> _data;

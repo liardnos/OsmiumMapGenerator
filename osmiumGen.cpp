@@ -491,6 +491,7 @@ int main(int argc, char* argv[]) {
             }
             printProgress(currentSize/(float)allocSize);
         }
+        std::cout << "done" << std::endl;
 
 
 

@@ -1,0 +1,6 @@
+*.osm
+*.pbf
+mapGen
+log
+buildSFML
+callgrind.out.*
