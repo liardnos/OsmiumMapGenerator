@@ -685,11 +685,15 @@ public:
 
 template <typename T>
 using Vector2 = NDVector<T, 2>;
-
-
 typedef Vector2<float> Vector2f;
 typedef Vector2<double> Vector2d;
 typedef Vector2<int> Vector2i;
+
+template <typename T>
+using Vector3 = NDVector<T, 3>;
+typedef Vector3<float> Vector3f;
+typedef Vector3<double> Vector3d;
+typedef Vector3<int> Vector3i;
 
 template <typename T>
 std::ostream &operator<<(std::ostream &stream, const Vector2<T> &that) {

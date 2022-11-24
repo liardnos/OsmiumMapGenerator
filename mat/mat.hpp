@@ -12,6 +12,7 @@ public:
 
     Mat3 operator*(const Mat3 &other) const;
     Vector2f operator*(const Vector2f &p1) const;
+    Vector3f operator*(const Vector3f &p1) const;
 
     void rx(float a);
     void ry(float a);

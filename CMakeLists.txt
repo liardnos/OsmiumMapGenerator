@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD 20)
 # Build types
 
 if (UNIX)
-  add_compile_options(-Wall -Wextra -Og)
+  add_compile_options(-Wall -Wextra -O4)
   SET(CMAKE_BUILD_TYPE DEBUG)
   #Install sfml if not already installed
   if (NOT SFML_FOUND)

@@ -21,4 +21,7 @@ callgrindOg:
 	-kcachegrind callgrind.*
 
 simplify:
+	./mapGen name=Paris ~/openStreetMap/france_filtered.pbf ~/openStreetMap/france_metro_dom_com_nc.osm.pbf
 	#osmium tags-filter france_metro_dom_com_nc.osm.pbf wr/boundary=administrative -o france_filtered.pbf --overwrite
+
+

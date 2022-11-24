@@ -70,7 +70,7 @@
 #include "mat/mat.hpp"
 
 // #include "spatial/UniTreeZone.hpp"
-#include "spatial/UniTree.hpp"
+#include "spatial/UniTreeZone.hpp"
 
 // The type of index used. This must match the include file above
 using index_type = osmium::index::map::FlexMem<osmium::unsigned_object_id_type, osmium::Location>;
@@ -84,7 +84,8 @@ public:
     sf::Color _color;
     std::vector<Vector2d> _points;
     std::vector<std::string> _labels;
-    bool _drawed = false;
+    float _height = 0;
+    Segmentf _boundingBox;
 
     friend ByteObject &operator<<(ByteObject &obj, StreeShape const &shape) {
         std::vector<Vector2f> vec;
@@ -175,20 +176,39 @@ public:
                 std::string label = std::string(tag.key()) + "=" + tag.value();
                 seg._labels.push_back(label);
             }
+            // search for height
+            try {
+                if (area.tags().has_key("height")) {
+                    seg._height = std::stof(area.tags().get_value_by_key("height"));
+                } else if (area.tags().has_key("min_height")) {
+                    seg._height = std::stof(area.tags().get_value_by_key("min_height"));
+                } else if (area.tags().has_key("level")) {
+                    seg._height = std::stof(area.tags().get_value_by_key("level"))*5;
+                }
+            } catch (std::exception &e) {
+                std::cout << "stof failed" << e.what() << std::endl;
+                std::cout << area.tags().get_value_by_key("height") << std::endl;
+                std::cout << area.tags().get_value_by_key("min_height") << std::endl;
+                std::cout << area.tags().get_value_by_key("level") << std::endl;
+            }
+            
+            // height=2.3
+            // min_height=2.3
+            // level=-2
             for (const auto& item : area) {
                 if (item.type() == osmium::item_type::outer_ring) {
-                    bool find = false;
+                    // bool find = false;
                     Color color = {1, 1, 1, 1};
                     for (auto const &match : g_colorVector) {
                         if (match._tag == 0) {
                             if (area.tags().has_key(match._key)) {
                                 color = match._color;
-                                find = true;
+                                // find = true;
                                 break;
                             }
                         } else if (area.tags().has_tag(match._key, match._tag)) {
                             color = match._color;
-                            find = true;
+                            // find = true;
                             break;
                         }
                     }
@@ -248,6 +268,7 @@ public:
     // This callback is called by osmium::apply for each area in the data.
     void area(const osmium::Area& area) {
         try {
+            std::cout << "hello?" << std::endl;
             std::cout << std::endl;
             for (auto &tag : area.tags())
                 std::cout << std::string(tag.key()) + "=" + tag.value() << std::endl;
@@ -367,369 +388,408 @@ int main(int argc, char* argv[]) {
         system(cmd.c_str());
     }
 
-    try {
-        std::vector<StreeShape> segs;
-        Segmentd boundingBox = {{DBL_MAX, DBL_MAX}, {-DBL_MAX, -DBL_MAX}};
+    std::vector<StreeShape> segs;
+    Segmentd boundingBox = {{DBL_MAX, DBL_MAX}, {-DBL_MAX, -DBL_MAX}};
 
-        osmium::handler::DynamicHandler handler;
-        handler.set<WKTDump>(segs, boundingBox);
-        osmium::io::File input_file{fileName};
-        osmium::area::Assembler::config_type assembler_config;
+    osmium::handler::DynamicHandler handler;
+    handler.set<WKTDump>(segs, boundingBox);
+    osmium::io::File input_file{fileName};
+    osmium::area::Assembler::config_type assembler_config;
 
-        // osmium::TagsFilter filter{false};
-        // filter.add_rule(true, "name", "Pont-à-Marcq");
-        // filter.add_rule(true, "landuse", "forest");
-        // filter.add_rule(true, "natural", "wood");
-        // osmium::area::MultipolygonManager<osmium::area::Assembler> mp_manager{assembler_config, filter};
-        osmium::area::MultipolygonManager<osmium::area::Assembler> mp_manager{assembler_config};
+    // osmium::TagsFilter filter{false};
+    // filter.add_rule(true, "name", "Pont-à-Marcq");
+    // filter.add_rule(true, "landuse", "forest");
+    // filter.add_rule(true, "natural", "wood");
+    // osmium::area::MultipolygonManager<osmium::area::Assembler> mp_manager{assembler_config, filter};
+    osmium::area::MultipolygonManager<osmium::area::Assembler> mp_manager{assembler_config};
 
-        std::cerr << "Pass 1...\n";
-        osmium::relations::read_relations(input_file, mp_manager);
-        std::cerr << "Pass 1 done\n";
+    std::cerr << "Pass 1...\n";
+    osmium::relations::read_relations(input_file, mp_manager);
+    std::cerr << "Pass 1 done\n";
 
-        index_type index;
-        location_handler_type location_handler{index};
+    index_type index;
+    location_handler_type location_handler{index};
 
-        location_handler.ignore_errors();
+    location_handler.ignore_errors();
 
-        std::cerr << "Pass 2...\n";
-        osmium::io::Reader reader{input_file};
-        osmium::apply(reader, location_handler, mp_manager.handler([&handler](osmium::memory::Buffer&& buffer) {
-            osmium::apply(buffer, handler);
-        }));
+    std::cerr << "Pass 2...\n";
+    osmium::io::Reader reader{input_file};
+    osmium::apply(reader, location_handler, mp_manager.handler([&handler](osmium::memory::Buffer&& buffer) {
+        osmium::apply(buffer, handler);
+    }));
 
-        std::cout << "\r" << segs.size() << " areas found" << std::endl;
-        reader.close();
-        std::cerr << "Pass 2 done\n";
-
+    std::cout << "\r" << segs.size() << " areas found" << std::endl;
+    reader.close();
+    std::cerr << "Pass 2 done\n";
 
 
 
 
-        std::cout << DEBUGVAR(boundingBox) << std::endl;
-        boundingBox._d -= boundingBox._p;
 
-        Vector2d center = boundingBox._p+boundingBox._d/2;
-        std::cout << DEBUGVAR(boundingBox) << std::endl;
+    std::cout << DEBUGVAR(boundingBox) << std::endl;
+    boundingBox._d -= boundingBox._p;
 
-        // do projection && update bounding box
-        boundingBox = {{DBL_MAX, DBL_MAX}, {-DBL_MAX, -DBL_MAX}};
-        for (auto &shape : segs) {
-            for (auto &p : shape._points) {
-                p[0] *= cos(p[1]/180*M_PI);
+    Vector2d center = boundingBox._p+boundingBox._d/2;
+    std::cout << DEBUGVAR(boundingBox) << std::endl;
 
-                boundingBox._p[0] = std::min(p[0], boundingBox._p[0]);
-                boundingBox._p[1] = std::min(p[1], boundingBox._p[1]);
-                boundingBox._d[0] = std::max(p[0], boundingBox._d[0]);
-                boundingBox._d[1] = std::max(p[1], boundingBox._d[1]);
-            }
+    // do projection && update bounding box
+    boundingBox = {{DBL_MAX, DBL_MAX}, {-DBL_MAX, -DBL_MAX}};
+    for (auto &shape : segs) {
+        for (auto &p : shape._points) {
+            p[0] *= cos(p[1]/180*M_PI);
+
+            boundingBox._p[0] = std::min(p[0], boundingBox._p[0]);
+            boundingBox._p[1] = std::min(p[1], boundingBox._p[1]);
+            boundingBox._d[0] = std::max(p[0], boundingBox._d[0]);
+            boundingBox._d[1] = std::max(p[1], boundingBox._d[1]);
         }
-        boundingBox._d -= boundingBox._p;
-        center = boundingBox._p+boundingBox._d/2;
+    }
+    boundingBox._d -= boundingBox._p;
+    center = boundingBox._p+boundingBox._d/2;
 
-        // center points && scale to meters && update bounding box
-        for (auto &shape : segs) {
-            for (auto &p : shape._points) {
-                p -= center;
-                p *= 111194.0;
+    // center points && scale to meters && update bounding box
+    for (auto &shape : segs) {
+        shape._boundingBox = {FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX};
+        for (auto &p : shape._points) {
+            p -= center;
+            p *= 111194.0;
 
-                boundingBox._p[0] = std::min(p[0], boundingBox._p[0]);
-                boundingBox._p[1] = std::min(p[1], boundingBox._p[1]);
-                boundingBox._d[0] = std::max(p[0], boundingBox._d[0]);
-                boundingBox._d[1] = std::max(p[1], boundingBox._d[1]);
-            }
+            boundingBox._p[0] = std::min(p[0], boundingBox._p[0]);
+            boundingBox._p[1] = std::min(p[1], boundingBox._p[1]);
+            boundingBox._d[0] = std::max(p[0], boundingBox._d[0]);
+            boundingBox._d[1] = std::max(p[1], boundingBox._d[1]);
+
+            shape._boundingBox._p[0] = std::min((float)p[0], shape._boundingBox._p[0]);
+            shape._boundingBox._p[1] = std::min((float)p[1], shape._boundingBox._p[1]);
+            shape._boundingBox._d[0] = std::max((float)p[0], shape._boundingBox._d[0]);
+            shape._boundingBox._d[1] = std::max((float)p[1], shape._boundingBox._d[1]);
         }
-        boundingBox._d -= boundingBox._p;
-        center = boundingBox._p+boundingBox._d/2;
-
-        // calculate shapes bounding box
-        // for (auto &shape : segs) {
-        //     shape._boundingBox = {DBL_MAX, DBL_MAX, DBL_MIN, DBL_MIN};
-        //     for (auto &p : shape._points) {
-        //         shape._boundingBox._p[0] = std::min(p[0], shape._boundingBox._p[0]);
-        //         shape._boundingBox._p[1] = std::min(p[1], shape._boundingBox._p[1]);
-        //         shape._boundingBox._d[0] = std::max(p[0], shape._boundingBox._d[0]);
-        //         shape._boundingBox._d[1] = std::max(p[1], shape._boundingBox._d[1]);
-        //     }
-        // }        
-
-        class UniTreeObj : public Vector2d {
-            public:
-            UniTreeObj(Vector2d const &vec, StreeShape &shape) : 
-                Vector2d(vec),
-                _shape(shape)
-            {
-                // std::cout << DEBUGVAR(data[0]) << std::endl;
-                // std::cout << DEBUGVAR(data[1]) << std::endl;
-            }
-
-            StreeShape &_shape;
-        };
+        shape._boundingBox._d -= shape._boundingBox._p;
+    }
+    boundingBox._d -= boundingBox._p;
+    center = boundingBox._p+boundingBox._d/2;
 
 
-        
+    
 
-        // Zone<double, 2> zone(boundingBox._p+boundingBox._d/2, boundingBox._d/2);
+    // Zone<double, 2> zone(boundingBox._p+boundingBox._d/2, boundingBox._d/2);
 
-        // fill UniTreeZone
-        auto treeZone = std::make_unique<UniTree<UniTreeObj, Vector2d, 2>>(boundingBox._p+boundingBox._d/2, boundingBox._d/2);
+    // fill UniTreeZone
+    std::unique_ptr<UniTreeZone<float, StreeShape, 2>> treeZone = std::make_unique<UniTreeZone<float, StreeShape, 2>>(Zone<float, 2>(boundingBox.cast<float>()));
 
-        std::vector<UniTreeObj> UniTreeObjects;
-        uint allocSize = 0;
-        for (StreeShape &shape : segs)
-            allocSize += shape._points.size();
-        std::cout << DEBUGVAR(allocSize) << std::endl;
-        UniTreeObjects.reserve(allocSize);
-        uint currentSize = 0;
-        srand(14);
-        std::cout << "building map..." << std::endl;
-        for (StreeShape &shape : segs) {
-            for (Vector2d const &p : shape._points) {
-                UniTreeObjects.emplace_back(p+Vector2d{(currentSize%2+1)*1./10000*currentSize, (currentSize%2+0)*1./10000*currentSize}, shape); // TODO this is bad, I need to make a new spatialisation tool
-                treeZone->addData(&UniTreeObjects.back());
-                currentSize += 1;
-            }
+    uint allocSize = segs.size();
+    std::cout << DEBUGVAR(allocSize) << std::endl;
+    uint currentSize = 0;
+    srand(14);
+    std::cout << "building map..." << std::endl;
+    for (StreeShape &shape : segs) {
+        treeZone->addData(Zone<float, 2>(shape._boundingBox), &shape);
+        if (!(currentSize%1000))
             printProgress(currentSize/(float)allocSize);
+        currentSize += 1;
+    }
+    printProgress(1);
+
+    std::cout << "done" << std::endl;
+
+
+
+    Vector2f _cameraOffset = {0, 0};
+    float _cameraAngle = 0;
+    Mat3 _matWorld;
+    Mat3 _matWorldInv;
+    float _camScale = 100;//1./winSize[0]/std::max(boundingBox._d[0], boundingBox._d[1]);
+
+    Vector2i winSize = {1900, 1000};
+    Vector2f winSizef = winSize.cast<float>(); 
+
+
+    sf::RenderWindow win(sf::VideoMode(winSize[0], winSize[1]), "Map Gen");
+    win.setFramerateLimit(60);
+
+    sf::Font font;
+    font.loadFromFile("assets/fonts/ARIBL0.ttf");
+    sf::Text text;
+    text.setFont(font);
+    uint textSize = 12;
+    text.setCharacterSize(textSize);
+    text.setFillColor(sf::Color::White);
+
+    bool displayLabel = false;
+    float camPitch = 0;
+
+    std::shared_ptr<std::vector<UniTreeZone<float, StreeShape, 2>::Storage*>> uniTreeBuffer = std::make_shared<std::vector<UniTreeZone<float, StreeShape, 2>::Storage*>>();
+    Vector2f mousePosPrev = {0, 0};
+
+    float minSizeGet = 0;
+    float minSizeGetFactor = 1;
+    float minSizeGetDelta = 0;
+
+    while (win.isOpen()) {
+        bool hasMove = false;
+
+        float camcos = cos(-_cameraAngle) * _camScale/100;
+        float camsin = sin(-_cameraAngle) * _camScale/100;
+
+        sf::Keyboard::isKeyPressed(sf::Keyboard::W) ? _cameraOffset[0] -= camsin, _cameraOffset[1] += camcos, hasMove = true : 0;
+        sf::Keyboard::isKeyPressed(sf::Keyboard::S) ? _cameraOffset[0] += camsin, _cameraOffset[1] -= camcos, hasMove = true : 0;
+        sf::Keyboard::isKeyPressed(sf::Keyboard::A) ? _cameraOffset[0] += camcos, _cameraOffset[1] += camsin, hasMove = true : 0;
+        sf::Keyboard::isKeyPressed(sf::Keyboard::D) ? _cameraOffset[0] -= camcos, _cameraOffset[1] -= camsin, hasMove = true : 0;
+
+        sf::Keyboard::isKeyPressed(sf::Keyboard::R) ? camPitch += 0.01, hasMove = true : 0;
+        sf::Keyboard::isKeyPressed(sf::Keyboard::F) ? camPitch -= 0.01, hasMove = true : 0;
+
+        sf::Keyboard::isKeyPressed(sf::Keyboard::Z) ? _cameraAngle += 0.01, hasMove = true : 0;
+        sf::Keyboard::isKeyPressed(sf::Keyboard::X) ? _cameraAngle -= 0.01, hasMove = true : 0;
+        
+        sf::Keyboard::isKeyPressed(sf::Keyboard::Q) ? _camScale *= 1.02, hasMove = true : 0;
+        sf::Keyboard::isKeyPressed(sf::Keyboard::E) ? _camScale *= 0.98, hasMove = true : 0;
+
+        Vector2f mousePos;
+        {
+            sf::Vector2i vec = sf::Mouse::getPosition(win);
+            mousePos = {(float)vec.x, (float)vec.y};
         }
-        std::cout << "done" << std::endl;
+        if (!(mousePosPrev == mousePos))
+            hasMove = true;
+        Vector2f mousePosCenterRelative = mousePos-winSize.cast<float>()/2;
+        mousePosPrev = mousePos;
 
 
+        sf::Event event;
+        while (win.pollEvent(event)) {
+            if (event.type == sf::Event::Closed) {
+                win.close();
+            } else if (event.type == sf::Event::KeyPressed) {
+                if (event.key.code == sf::Keyboard::L) {
+                    displayLabel = !displayLabel;
+                } else if (event.key.code == sf::Keyboard::M) {
+                    std::cout << "save..." << std::endl;
+                    
+                    struct QuickMatch {
+                        char const *key;
+                        char const *value;
+                    };
 
-        Vector2f _cameraOffset = {0, 0};
-        float _cameraAngle = 0;
-        Mat3 _matWorld;
-        Mat3 _matWorldInv;
-        float _camScale = 1;//1./winSize[0]/std::max(boundingBox._d[0], boundingBox._d[1]);
+                    std::vector<QuickMatch> toKeep = {
+                        {"building", 0},
+                    };
 
-        Vector2i winSize = {800, 800};
-
-        sf::RenderWindow win(sf::VideoMode(winSize[0], winSize[1]), "Map Gen");
-        win.setFramerateLimit(60);
-
-        sf::Font font;
-        font.loadFromFile("assets/fonts/ARIBL0.ttf");
-        sf::Text text;
-        text.setFont(font);
-        uint textSize = 12;
-        text.setCharacterSize(textSize);
-        text.setFillColor(sf::Color::White);
-
-        bool displayLabel = false;
-
-        std::shared_ptr<std::vector<UniTreeObj *>> uniTreeBuffer = std::make_shared<std::vector<UniTreeObj*>>();
-        while (win.isOpen()) {
-            win.clear();
-
-
-            float camcos = -cos(-_cameraAngle) * 1.0/_camScale*8;
-            float camsin = -sin(-_cameraAngle) * 1.0/_camScale*8;
-
-            sf::Keyboard::isKeyPressed(sf::Keyboard::W) ? _cameraOffset[0] += camsin, _cameraOffset[1] -= camcos : 0;
-            sf::Keyboard::isKeyPressed(sf::Keyboard::S) ? _cameraOffset[0] -= camsin, _cameraOffset[1] += camcos : 0;
-            sf::Keyboard::isKeyPressed(sf::Keyboard::A) ? _cameraOffset[0] -= camcos, _cameraOffset[1] -= camsin : 0;
-            sf::Keyboard::isKeyPressed(sf::Keyboard::D) ? _cameraOffset[0] += camcos, _cameraOffset[1] += camsin : 0;
-
-            sf::Keyboard::isKeyPressed(sf::Keyboard::Z) ? _cameraAngle += 0.025 : 0;
-            sf::Keyboard::isKeyPressed(sf::Keyboard::X) ? _cameraAngle -= 0.025 : 0;
-            
-            sf::Keyboard::isKeyPressed(sf::Keyboard::E) ? _camScale *= 1.02 : 0;
-            sf::Keyboard::isKeyPressed(sf::Keyboard::Q) ? _camScale *= 0.98 : 0;
-
-            Vector2f mousePos;
-            {
-                sf::Vector2i vec = sf::Mouse::getPosition(win);
-                mousePos = {(float)vec.x, (float)vec.y};
-            }
-            Vector2f mousePosCenterRelative = mousePos-winSize.cast<float>()/2;
-
-
-            sf::Event event;
-            while (win.pollEvent(event)) {
-                if (event.type == sf::Event::Closed) {
-                    win.close();
-                } else if (event.type == sf::Event::KeyPressed) {
-                    if (event.key.code == sf::Keyboard::L) {
-                        displayLabel = !displayLabel;
-                    } else if (event.key.code == sf::Keyboard::M) {
-                        std::cout << "save..." << std::endl;
-                        
-                        struct QuickMatch {
-                            char const *key;
-                            char const *value;
-                        };
-
-                        std::vector<QuickMatch> toKeep = {
-                            {"building", 0},
-                        };
-
-                        std::vector<StreeShape> toSave;
-                        toSave.reserve(segs.size());
-                        for (StreeShape &shape : segs) {
-                            bool keep = false;
-                            for (std::string const &s : shape._labels) {
-                                std::string key = s.substr(0, s.rfind('='));
-                                std::string value = s.substr(s.rfind('=')+1);
-                                for (QuickMatch const &ss : toKeep) {
-                                    if (key == ss.key && (ss.value == 0 || value == ss.value)) {
-                                        keep = true;
-                                        goto keepIt;
-                                    }
+                    std::vector<StreeShape> toSave;
+                    toSave.reserve(segs.size());
+                    for (StreeShape &shape : segs) {
+                        // bool keep = false;
+                        for (std::string const &s : shape._labels) {
+                            std::string key = s.substr(0, s.rfind('='));
+                            std::string value = s.substr(s.rfind('=')+1);
+                            for (QuickMatch const &ss : toKeep) {
+                                if (key == ss.key && (ss.value == 0 || value == ss.value)) {
+                                    // keep = true;
+                                    goto keepIt;
                                 }
                             }
-                            if (0) {
-                                keepIt:
-                                toSave.emplace_back(shape);
-                            }
                         }
-
-                        ByteObject obj;
-                        obj << toSave;
-
-                        std::ofstream file("../BoatFight/map.bmap", std::fstream::binary);
-                        file << obj;
-                        std::cout << "save...ok" << std::endl;
-
-                    } else if (event.key.code == sf::Keyboard::N) {
-                        // segs.clear();
-                        UniTreeObjects.clear();
-
-                        std::ifstream file("../BoatFight/map.bmap", std::ifstream::binary);
-
-                        ByteObject obj;
-                        file >> obj;
-
-                        obj >> segs;
-
-
-                        // update bounding box
-                        for (auto &shape : segs) {
-                            for (auto &p : shape._points) {
-                                boundingBox._p[0] = std::min(p[0], boundingBox._p[0]);
-                                boundingBox._p[1] = std::min(p[1], boundingBox._p[1]);
-                                boundingBox._d[0] = std::max(p[0], boundingBox._d[0]);
-                                boundingBox._d[1] = std::max(p[1], boundingBox._d[1]);
-                            }
+                        if (0) {
+                            keepIt:
+                            toSave.emplace_back(shape);
                         }
-                        boundingBox._d -= boundingBox._p;
-                        center = boundingBox._p+boundingBox._d/2;
+                    }
 
-                        treeZone = std::make_unique<UniTree<UniTreeObj, Vector2d, 2>>(boundingBox._p+boundingBox._d/2, boundingBox._d/2);
+                    ByteObject obj;
+                    obj << toSave;
+
+                    std::ofstream file("../BoatFight/map.bmap", std::fstream::binary);
+                    file << obj;
+                    std::cout << "save...ok" << std::endl;
+
+                } else if (event.key.code == sf::Keyboard::N) {
+                    // segs.clear();
+                    std::ifstream file("../BoatFight/map.bmap", std::ifstream::binary);
+
+                    ByteObject obj;
+                    file >> obj;
+
+                    obj >> segs;
+
+                    // update bounding box
+                    boundingBox = {FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX};
+                    for (auto &shape : segs) {
+                        shape._boundingBox = {FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX};
+                        for (auto &p : shape._points) {
+                            boundingBox._p[0] = std::min(p[0], boundingBox._p[0]);
+                            boundingBox._p[1] = std::min(p[1], boundingBox._p[1]);
+                            boundingBox._d[0] = std::max(p[0], boundingBox._d[0]);
+                            boundingBox._d[1] = std::max(p[1], boundingBox._d[1]);
+
+                            shape._boundingBox._p[0] = std::min((float)p[0], shape._boundingBox._p[0]);
+                            shape._boundingBox._p[1] = std::min((float)p[1], shape._boundingBox._p[1]);
+                            shape._boundingBox._d[0] = std::max((float)p[0], shape._boundingBox._d[0]);
+                            shape._boundingBox._d[1] = std::max((float)p[1], shape._boundingBox._d[1]);
+                        }
+                        shape._boundingBox._d -= shape._boundingBox._p;
+                    }
+                    boundingBox._d -= boundingBox._p;
+                    center = boundingBox._p+boundingBox._d/2;
+
+                    treeZone = std::make_unique<UniTreeZone<float, StreeShape, 2>>(Zone<float, 2>(boundingBox.cast<float>()));
 
 
-                        uint allocSize = 0;
-                        for (StreeShape &shape : segs)
-                            allocSize += shape._points.size();
-                        std::cout << DEBUGVAR(allocSize) << std::endl;
-                        UniTreeObjects.reserve(allocSize);
-                        uint currentSize = 0;
-                        std::cout << "building map..." << std::endl;
-                        srand(14);
-                        for (StreeShape &shape : segs) {
-                            for (Vector2d const &p : shape._points) {
-                                UniTreeObjects.emplace_back(p+Vector2d{(currentSize%2+1)*1./10000*currentSize, (currentSize%2+0)*1./10000*currentSize}, shape); // TODO this is bad, I need to make a new spatialisation tool
-
-                                treeZone->addData(&UniTreeObjects.back());
-                                currentSize += 1;
-                            }
+                    uint allocSize = segs.size();
+                    std::cout << DEBUGVAR(allocSize) << std::endl;
+                    uint currentSize = 0;
+                    std::cout << "building map..." << std::endl;
+                    srand(14);
+                    for (StreeShape &shape : segs) {
+                        treeZone->addData(Zone<float, 2>(shape._boundingBox), &shape);
+                        if (!(currentSize%1000))
                             printProgress(currentSize/(float)allocSize);
-                        }
+                        currentSize += 1;
                     }
+                    printProgress(1);
                 }
             }
-
-
-
-            Mat3 matrix;
-            matrix.tx(_cameraOffset[0]);
-            matrix.ty(_cameraOffset[1]);
-            matrix.rrz(_cameraAngle);
-            matrix.scale(_camScale);
-            matrix.ttx(-mousePosCenterRelative[0]*0.5);
-            matrix.tty(-mousePosCenterRelative[1]*0.5);
-            _matWorld = matrix;
-            _matWorldInv = matrix.inv();
-
-            sf::CircleShape ship;
-            ship.setFillColor(sf::Color::Red);
-            ship.setRadius(_camScale*1);
-            ship.setPosition(-mousePosCenterRelative[0]*0.8+winSize[0]/2, -mousePosCenterRelative[1]*0.8+winSize[1]/2);
-
-            win.draw(ship);
-
-            Vector2d p1 = (_matWorldInv * (winSize.cast<float>()*Vector2f{-1, -1})/2).cast<double>();  
-            Vector2d p2 = (_matWorldInv * (winSize.cast<float>()*Vector2f{-1,  1})/2).cast<double>();
-            Vector2d p3 = (_matWorldInv * (winSize.cast<float>()*Vector2f{ 1, -1})/2).cast<double>();
-            Vector2d p4 = (_matWorldInv * (winSize.cast<float>()*Vector2f{ 1,  1})/2).cast<double>();
-            Vector2d center = (p1+p4);
-
-            Segmentd cameraBoundingBox = {
-                std::min(std::min(p1[0], p2[0]), std::min(p3[0], p4[0])),
-                std::min(std::min(p1[1], p2[1]), std::min(p3[1], p4[1])),
-                std::max(std::max(p1[0], p2[0]), std::max(p3[0], p4[0])),
-                std::max(std::max(p1[1], p2[1]), std::max(p3[1], p4[1])),
-            };
-            cameraBoundingBox._d -= cameraBoundingBox._p;
-
-            Vector2d size = cameraBoundingBox._d/2;
-
-            uniTreeBuffer->clear();
-            treeZone->getInArea(center, size, uniTreeBuffer);
-            
-
-
-            // uint allVertexCursor = 0;
-            // int shapeDraw = 1024*256;
-            uint maxTextDraw = 16;
-
-            Vector2f winSizef = winSize.cast<float>()/2; 
-            for (auto &obj : *uniTreeBuffer) {
-                auto &shape = obj->_shape;
-                if (shape._drawed)  
-                        continue;
-                shape._drawed = true;
-
-                // display individual
-                // shapeDraw -= shape._points.size();
-                // if (shapeDraw <= 0) {
-                //     break;
-                // }
-                sf::VertexArray lines(sf::LineStrip, shape._points.size());
-                uint i = 0;  
-                for (auto &p : shape._points) {
-                    Vector2f p1 = _matWorld * p.cast<float>() + winSizef;
-                    lines[i] = sf::Vertex(sf::Vector2f(p1[0], p1[1]), shape._color);
-                    ++i;
-                }
-
-                win.draw(lines);
-
-           
-                if (displayLabel) {
-                    Vector2f p1 = _matWorld * shape._points[0].cast<float>() + winSize.cast<float>()/2;
-                    if (shape._labels.size() && maxTextDraw > 0 && 0 <= p1[0] && p1[0] < winSize[0] && 0 <= p1[1] && p1[1] < winSize[1]) {
-                        --maxTextDraw;
-                        text.setPosition(p1[0], p1[1]);
-                        for (std::string const &string : shape._labels) {
-                            text.setString(string);
-                            win.draw(text);
-                            text.move({0, textSize*1.1});
-                        }
-                    }
-                }
-            }
-            for (auto &obj : *uniTreeBuffer)
-                obj->_shape._drawed = false;
-            win.display();
         }
 
 
 
+        Mat3 matrix;
 
 
-    } catch (const std::exception& e) {
-        // All exceptions used by the Osmium library derive from std::exception.
-        std::cerr << e.what() << '\n';
-        return 1;
+        matrix.tz(_camScale);
+        matrix.rx(camPitch);
+        matrix.rz(_cameraAngle);
+        
+        matrix.tx(_cameraOffset[0]);
+        matrix.ty(_cameraOffset[1]);
+
+
+        // matrix.scale(_camScale);
+        // matrix.ttx(mousePosCenterRelative[0]*0.5);
+        // matrix.tty(mousePosCenterRelative[1]*0.5);
+        // matrix.rrz(_cameraAngle);
+
+
+
+
+        _matWorld = matrix;
+        _matWorldInv = matrix.inv();
+
+        // sf::CircleShape ship;
+        // ship.setFillColor(sf::Color::Red);
+        // ship.setRadius(_camScale*1);
+        // ship.setPosition(-mousePosCenterRelative[0]*0.8+winSize[0]/2, -mousePosCenterRelative[1]*0.8+winSize[1]/2);
+
+        // win.draw(ship);
+
+        Vector3f cameraPos = (_matWorldInv * Vector3f{0, 0, 0});
+        Vector2f scale = winSizef/winSizef[0]*0.5;
+        Vector3f p1 = (_matWorldInv * Vector3f{-scale[0], -scale[1], 1});
+        Vector3f p2 = (_matWorldInv * Vector3f{-scale[0],  scale[1], 1});
+        Vector3f p3 = (_matWorldInv * Vector3f{ scale[0], -scale[1], 1});
+        Vector3f p4 = (_matWorldInv * Vector3f{ scale[0],  scale[1], 1});
+        Vector3f p1d = p1 - cameraPos;
+        Vector3f p2d = p2 - cameraPos;
+        Vector3f p3d = p3 - cameraPos;
+        Vector3f p4d = p4 - cameraPos;
+        std::cout << DEBUGVAR(cameraPos) << std::endl;
+        if (cameraPos[2] < 0) {
+            p1d[2] = std::max(p1d[2], (float)0.1);
+            p2d[2] = std::max(p2d[2], (float)0.1);
+            p3d[2] = std::max(p3d[2], (float)0.1);
+            p4d[2] = std::max(p4d[2], (float)0.1);
+        } else {
+            p1d[2] = std::min(p1d[2], (float)-0.1);
+            p2d[2] = std::min(p2d[2], (float)-0.1);
+            p3d[2] = std::min(p3d[2], (float)-0.1);
+            p4d[2] = std::min(p4d[2], (float)-0.1);
+        }
+        p1 += p1d * -(p1[2] / p1d[2]);
+        p2 += p2d * -(p2[2] / p2d[2]);
+        p3 += p3d * -(p3[2] / p3d[2]);
+        p4 += p4d * -(p4[2] / p4d[2]);
+
+        Segmentd cameraBoundingBox = {
+            std::min(std::min(p1[0], p2[0]), std::min(p3[0], p4[0])),
+            std::min(std::min(p1[1], p2[1]), std::min(p3[1], p4[1])),
+            std::max(std::max(p1[0], p2[0]), std::max(p3[0], p4[0])),
+            std::max(std::max(p1[1], p2[1]), std::max(p3[1], p4[1])),
+        };
+        cameraBoundingBox._d -= cameraBoundingBox._p;
+
+
+        uniTreeBuffer->clear();
+        treeZone->getColides(Zone<float, 2>(cameraBoundingBox.cast<float>()), minSizeGet, uniTreeBuffer);
+        
+
+
+        uint maxTextDraw = 16;
+        if (hasMove)
+            minSizeGetFactor = 1;
+
+        uint maxDisplayShape = 1024*4;
+        std::cout << DEBUGVAR(uniTreeBuffer->size()) << std::endl;
+        std::cout << DEBUGVAR(_camScale) << std::endl;
+        float delta = (float)maxDisplayShape-uniTreeBuffer->size();
+        if (std::abs(delta) > 16) {
+            std::cout << DEBUGVAR(delta) << std::endl;
+            float newMinSizeGetDelta = -delta/maxDisplayShape*minSizeGetFactor;//*_camScale;
+            if (minSizeGetDelta * newMinSizeGetDelta < 0)
+                minSizeGetFactor /= 2;
+            else
+                minSizeGetFactor *= 1.1;
+
+            minSizeGet += newMinSizeGetDelta;
+            minSizeGetDelta = newMinSizeGetDelta;
+            std::cout << DEBUGVAR(uniTreeBuffer->size()) << std::endl;
+            std::cout << DEBUGVAR(minSizeGetFactor) << std::endl;
+            std::cout << DEBUGVAR(-delta/maxDisplayShape) << std::endl;
+            std::cout << DEBUGVAR(minSizeGet) << std::endl;
+            if (minSizeGet < 0)
+                minSizeGet = 0;
+        }
+        for (auto &obj : *uniTreeBuffer) {
+            auto &shape = *obj->_data;
+            sf::VertexArray lines(sf::LineStrip, shape._points.size());
+            uint i = 0;  
+            for (auto &p : shape._points) {
+                Vector3f vec3 = {p[0], p[1], -shape._height};
+                Vector3f p1 = _matWorld * vec3;
+                if (p1[2] < 0)
+                    continue;
+                p1[0] /= p1[2];
+                p1[1] /= p1[2];
+                p1 *= Vector3f{winSizef[0], winSizef[0], 0};
+                p1 += Vector3f{winSizef[0]/2, winSizef[1]/2, 0};
+                lines[i++] = sf::Vertex(sf::Vector2f(p1[0], p1[1]), shape._color);
+            }
+            lines.resize(i);
+            win.draw(lines);
+
+            if (displayLabel) {
+                Vector2f p1 = shape._points[0].cast<float>();
+                Vector3f vec3 = {p1[0], p1[1], -shape._height};
+                Vector3f p1Proj = _matWorld * vec3;
+                if (p1Proj[2] < 0)
+                    continue;
+                p1Proj[0] /= p1Proj[2];
+                p1Proj[1] /= p1Proj[2];
+                p1Proj *= Vector3f{winSizef[0], winSizef[0], 0};
+                p1Proj += Vector3f{winSizef[0]/2, winSizef[1]/2, 0};
+
+                if (shape._labels.size() && maxTextDraw > 0 && 0 <= p1Proj[0] && p1Proj[0] < winSize[0] && 0 <= p1Proj[1] && p1Proj[1] < winSize[1]) {
+                    --maxTextDraw;
+                    text.setPosition(p1Proj[0], p1Proj[1]);
+                    for (std::string const &string : shape._labels) {
+                        text.setString(string);
+                        win.draw(text);
+                        text.move({0, textSize*1.1});
+                    }
+                }
+            }
+        }
+        win.display();
+        // if (hasMove)
+            win.clear();
     }
 }
 

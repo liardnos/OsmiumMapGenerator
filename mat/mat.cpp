@@ -30,6 +30,15 @@ Vector2f Mat3::operator*(const Vector2f &p1) const {
     return res;
 }
 
+Vector3f Mat3::operator*(Vector3f const &p1) const {
+    Vector3f res;
+    res[0] = p1[0]*mat[0*4+0] + p1[1]*mat[1*4+0] + p1[2]*mat[2*4+0] + 1*mat[3*4+0];
+    res[1] = p1[0]*mat[0*4+1] + p1[1]*mat[1*4+1] + p1[2]*mat[2*4+1] + 1*mat[3*4+1];
+    res[2] = p1[0]*mat[0*4+2] + p1[1]*mat[1*4+2] + p1[2]*mat[2*4+2] + 1*mat[3*4+2];
+    return res;
+}
+
+
 void Mat3::rx(float a) {
     Mat3 tmpMat;
     tmpMat[5] = cosf(a);
