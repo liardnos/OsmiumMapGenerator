@@ -25,6 +25,14 @@
 
 */
 
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+#include <stdlib.h>
+
+#include <curlpp/cURLpp.hpp>
+#include <curlpp/Easy.hpp>
+#include <curlpp/Options.hpp>
+
 #include <cstring>  // for std::strcmp
 #include <iostream> // for std::cout, std::cerr
 
@@ -60,6 +68,7 @@
 #include <vector>
 
 #include <float.h>
+#include <sstream>
 
 #include <fstream>
 
@@ -68,6 +77,8 @@
 #include "utils.hpp"
 
 #include "mat/mat.hpp"
+
+#include "json.hpp"
 
 // #include "spatial/UniTreeZone.hpp"
 #include "spatial/UniTreeZone.hpp"
@@ -82,15 +93,15 @@ class StreeShape {
 public:
     // Segmentd _seg;
     sf::Color _color;
-    std::vector<Vector2d> _points;
+    std::vector<Vector3d> _points;
     std::vector<std::string> _labels;
     float _height = 0;
     Segmentf _boundingBox;
 
     friend ByteObject &operator<<(ByteObject &obj, StreeShape const &shape) {
-        std::vector<Vector2f> vec;
+        std::vector<Vector3f> vec;
         vec.reserve(shape._points.size());
-        for (Vector2d const &p : shape._points)
+        for (Vector3d const &p : shape._points)
             vec.push_back(p.cast<float>());
 
         obj << shape._color << vec << shape._labels;
@@ -98,11 +109,11 @@ public:
     }
 
     friend ByteObject &operator>>(ByteObject &obj, StreeShape &shape) {
-        std::vector<Vector2f> vec;
+        std::vector<Vector3f> vec;
         obj >> shape._color >> vec >> shape._labels;
         shape._points.clear();
         shape._points.reserve(vec.size());
-        for (Vector2f const &p : vec)
+        for (Vector3f const &p : vec)
             shape._points.push_back(p.cast<double>());
         return obj;
     }
@@ -187,9 +198,9 @@ public:
                 }
             } catch (std::exception &e) {
                 std::cout << "stof failed" << e.what() << std::endl;
-                std::cout << area.tags().get_value_by_key("height") << std::endl;
-                std::cout << area.tags().get_value_by_key("min_height") << std::endl;
-                std::cout << area.tags().get_value_by_key("level") << std::endl;
+                // std::cout << area.tags().get_value_by_key("height") << std::endl;
+                // std::cout << area.tags().get_value_by_key("min_height") << std::endl;
+                // std::cout << area.tags().get_value_by_key("level") << std::endl;
             }
             
             // height=2.3
@@ -224,7 +235,8 @@ public:
                     auto& ring = static_cast<const osmium::OuterRing&>(item);
 
                     for (auto const &p : ring) {
-                        Vector2d pos = {p.lon(), -p.lat()};
+                        Vector3d pos = {p.lon(), p.lat(), -seg._height};
+
 
                         _boundingBox._p[0] = std::min(pos[0], _boundingBox._p[0]);
                         _boundingBox._p[1] = std::min(pos[1], _boundingBox._p[1]);
@@ -268,7 +280,6 @@ public:
     // This callback is called by osmium::apply for each area in the data.
     void area(const osmium::Area& area) {
         try {
-            std::cout << "hello?" << std::endl;
             std::cout << std::endl;
             for (auto &tag : area.tags())
                 std::cout << std::string(tag.key()) + "=" + tag.value() << std::endl;
@@ -378,14 +389,17 @@ int main(int argc, char* argv[]) {
         std::cout << DEBUGVAR(boundingBox) << std::endl;
         std::string cmd = std::string("osmium extract --bbox ")+std::to_string(boundingBox._p[0])+","+std::to_string(boundingBox._p[1])+","+std::to_string(boundingBox._d[0])+","+std::to_string(boundingBox._d[1])+" "+argv[3]+" -o "+fileName+ " --overwrite";
         std::cout << DEBUGVAR(cmd) << std::endl;
-        system(cmd.c_str());
+        int r = system(cmd.c_str());
+        (void)r;
 
     } else if (argc == 6) {
         fileName = "tmp.osm.pbf";
 
         std::string cmd = std::string("osmium extract --bbox ")+argv[1]+","+argv[2] +","+ argv[3] +","+ argv[4]+" "+argv[5]+" -o "+fileName+ " --overwrite";
         std::cout << DEBUGVAR(cmd) << std::endl;
-        system(cmd.c_str());
+        int r = system(cmd.c_str());
+        (void)r;
+
     }
 
     std::vector<StreeShape> segs;
@@ -420,23 +434,180 @@ int main(int argc, char* argv[]) {
 
     std::cout << "\r" << segs.size() << " areas found" << std::endl;
     reader.close();
-    std::cerr << "Pass 2 done\n";
+    std::cerr << "Pass 2 done" << std::endl;
 
-
-
-
-
-    std::cout << DEBUGVAR(boundingBox) << std::endl;
     boundingBox._d -= boundingBox._p;
 
     Vector2d center = boundingBox._p+boundingBox._d/2;
+    
+    Vector2f _cameraOffset = {0, 0};
+    float _cameraAngle = 0;
+    Mat3 _matWorld;
+    Mat3 _matWorldInv;
+    float _camScale = 10000;//1./winSize[0]/std::max(boundingBox._d[0], boundingBox._d[1]);
+
     std::cout << DEBUGVAR(boundingBox) << std::endl;
+    std::mutex segsMut;
+
+
+
+    struct ThreadShared {
+        ThreadShared(std::vector<StreeShape> &segs) {
+            segIt = segs.begin();
+            pIt = segIt->_points.begin();
+        }
+        uint const threadsCount = 2;
+        int const requestCount = 128;
+        int aliveThreads = threadsCount;
+
+        std::mutex iteratorMut;
+        std::vector<StreeShape>::iterator segIt;
+        std::vector<Vector3d>::iterator pIt;
+        int currentOffset = 0;
+        float heightmoy = 0;
+        bool finish = false;
+    };
+
+
+    setenv("PYTHONPATH",".",1);
+    Py_Initialize();
+    PyObject *pFileName, *pModule, *pDict, *presult, *pValue;
+
+    pFileName = PyUnicode_FromString((char *)"elevation");
+    pModule = PyImport_Import(pFileName);
+    pDict = PyModule_GetDict(pModule);
+
+    PyObject *pFunc = PyDict_GetItemString(pDict, (char*)"lookUpElevation");
+
+
+    std::unique_ptr<ThreadShared> threadShared = std::make_unique<ThreadShared>(segs);
+
+
+    if (1) { // get the height map
+        int pCount = 0; // number of point in the graph
+        for (auto &seg : segs) {
+            pCount += seg._points.size();
+            seg._color.a = 50; 
+        }
+        std::cout << DEBUGVAR(pCount) << std::endl;
+        std::shared_ptr<std::vector<Vector3f>> requestBuffer = std::make_shared<std::vector<Vector3f>>(pCount);
+        { // backup original lat lon for elevaltion requests
+            
+            int i = 0;
+            for (auto seg : segs)
+                for (auto p : seg._points)
+                    (*requestBuffer)[i++] = p.cast<float>();
+        }
+
+        std::cout << "fetching elevation" << std::endl;
+
+        std::thread *threads[threadShared->threadsCount];
+        for (uint threadId = 0; threadId < threadShared->threadsCount; threadId++) {
+            threads[threadId] = new std::thread(
+            [&threads, &threadShared, &segs, pCount, requestBuffer, &segsMut, &pFileName, &pModule, &pDict, &presult, &pValue, pFunc](){
+                int const &requestCount = threadShared->requestCount;
+                std::mutex &iteratorMut = threadShared->iteratorMut;
+                bool &finish = threadShared->finish;
+                auto &segIt = threadShared->segIt;
+                auto &pIt = threadShared->pIt;
+                auto &currentOffset = threadShared->currentOffset;
+                auto &heightmoy = threadShared->heightmoy;
+                auto &aliveThreads = threadShared->aliveThreads;
+                auto const &threadsCount = threadShared->threadsCount;
+
+
+                Vector3f buf[requestCount];
+                auto lsegIt = segIt;
+                auto lpIt = pIt;
+
+                while (1) {
+                    uint count = 0;
+                    {
+                        std::lock_guard<std::mutex> const lockable(iteratorMut);
+                        lsegIt = segIt;
+                        lpIt = pIt;
+                        if (finish)
+                            break;
+                        // advance iterator for next thread
+                        for (; count < requestCount;) {
+                            count++;
+                            pIt++;
+                            if (pIt == segIt->_points.end()) {
+                                segIt++;
+                                if (segIt == segs.end()) {
+                                    finish = true;
+                                    break;
+                                }
+                                pIt = segIt->_points.begin();
+                            }
+                        }
+                        // copy data in buffer                
+                        for (uint i = 0; i < count; i++)
+                            buf[i] = (*requestBuffer)[currentOffset++];
+                    }
+
+                    
+                    // curlpp::Cleanup myCleanup;
+                    // curlpp::Easy myRequest;
+                    // std::string requestString = "127.0.0.1:8080/api/v1/lookup?locations=";
+                    // for (uint i = 0; i < count; i++) {
+                    //     if (i) requestString += "|";
+                    //     requestString += std::to_string(buf[i][1]) + "," + std::to_string(buf[i][0]);
+                    // }
+                    // myRequest.setOpt<curlpp::options::Url>(requestString);
+                    // std::stringstream ss;
+                    // ss << myRequest;
+                    // nlohmann::json data = nlohmann::json::parse(ss.str());
+
+                    { // data in segs
+                        // std::lock_guard<std::mutex> const lockable(segsMut);
+                        for (uint i = 0; i < count; i++) {
+                            std::cout << "build value" << std::endl;
+                            pValue = Py_BuildValue("f f", buf[i][1], buf[i][0]);
+                            presult = PyObject_CallObject(pFunc, pValue);
+                            (*lpIt)[2] -= (double)PyFloat_AS_DOUBLE(presult);
+                            heightmoy += (*lpIt)[2];
+                            lpIt++;
+                            if (lpIt == lsegIt->_points.end()) {
+                                lsegIt->_color.a = 255; 
+                                lsegIt++;
+                                lpIt = lsegIt->_points.begin();
+                            }
+
+
+                        }
+                        printProgress((float)currentOffset/pCount);
+                    }
+                }
+
+
+                {
+                    iteratorMut.lock();
+                    aliveThreads--;
+                    if (aliveThreads == 0) {
+                        printProgress(1);
+                        heightmoy /= pCount;
+                        std::lock_guard<std::mutex> segsMutLock(segsMut);
+                        for (auto &seg : segs)
+                            for (auto &p : seg._points)
+                                p[2] -= heightmoy;
+                        iteratorMut.unlock();
+                        goto next;
+                    }
+                    iteratorMut.unlock();
+                    next:;
+                }
+            });
+        }
+    }
+
 
     // do projection && update bounding box
     boundingBox = {{DBL_MAX, DBL_MAX}, {-DBL_MAX, -DBL_MAX}};
     for (auto &shape : segs) {
-        for (auto &p : shape._points) {
+        for (auto &p : shape._points) { 
             p[0] *= cos(p[1]/180*M_PI);
+            p[1] *= -1;
 
             boundingBox._p[0] = std::min(p[0], boundingBox._p[0]);
             boundingBox._p[1] = std::min(p[1], boundingBox._p[1]);
@@ -444,6 +615,7 @@ int main(int argc, char* argv[]) {
             boundingBox._d[1] = std::max(p[1], boundingBox._d[1]);
         }
     }
+
     boundingBox._d -= boundingBox._p;
     center = boundingBox._p+boundingBox._d/2;
 
@@ -451,8 +623,10 @@ int main(int argc, char* argv[]) {
     for (auto &shape : segs) {
         shape._boundingBox = {FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX};
         for (auto &p : shape._points) {
-            p -= center;
-            p *= 111194.0;
+            p[0] -= center[0];
+            p[1] -= center[1];
+            p[0] *= 111194.0;
+            p[1] *= 111194.0;
 
             boundingBox._p[0] = std::min(p[0], boundingBox._p[0]);
             boundingBox._p[1] = std::min(p[1], boundingBox._p[1]);
@@ -480,7 +654,6 @@ int main(int argc, char* argv[]) {
     uint allocSize = segs.size();
     std::cout << DEBUGVAR(allocSize) << std::endl;
     uint currentSize = 0;
-    srand(14);
     std::cout << "building map..." << std::endl;
     for (StreeShape &shape : segs) {
         treeZone->addData(Zone<float, 2>(shape._boundingBox), &shape);
@@ -489,23 +662,17 @@ int main(int argc, char* argv[]) {
         currentSize += 1;
     }
     printProgress(1);
-
     std::cout << "done" << std::endl;
 
-
-
-    Vector2f _cameraOffset = {0, 0};
-    float _cameraAngle = 0;
-    Mat3 _matWorld;
-    Mat3 _matWorldInv;
-    float _camScale = 100;//1./winSize[0]/std::max(boundingBox._d[0], boundingBox._d[1]);
 
     Vector2i winSize = {1900, 1000};
     Vector2f winSizef = winSize.cast<float>(); 
 
 
+    float targetFrameRateMonving = 30;
+    float targetFrameRate = 30;
     sf::RenderWindow win(sf::VideoMode(winSize[0], winSize[1]), "Map Gen");
-    win.setFramerateLimit(60);
+    win.setFramerateLimit(targetFrameRateMonving*1.1);
 
     sf::Font font;
     font.loadFromFile("assets/fonts/ARIBL0.ttf");
@@ -518,15 +685,20 @@ int main(int argc, char* argv[]) {
     bool displayLabel = false;
     float camPitch = 0;
 
-    std::shared_ptr<std::vector<UniTreeZone<float, StreeShape, 2>::Storage*>> uniTreeBuffer = std::make_shared<std::vector<UniTreeZone<float, StreeShape, 2>::Storage*>>();
-    Vector2f mousePosPrev = {0, 0};
+    std::shared_ptr<std::vector<std::shared_ptr<UniTreeZone<float, StreeShape, 2>::Storage>>> uniTreeBuffer = std::make_shared<std::vector<std::shared_ptr<UniTreeZone<float, StreeShape, 2>::Storage>>>();
+    // Vector2f mousePosPrev = {0, 0};
 
     float minSizeGet = 0;
     float minSizeGetFactor = 1;
     float minSizeGetDelta = 0;
 
+    sf::Clock Clock;
+    bool hasMovePrev = false;
+    bool hasMove = false;
+
     while (win.isOpen()) {
-        bool hasMove = false;
+        hasMovePrev = hasMove;
+        hasMove = false;
 
         float camcos = cos(-_cameraAngle) * _camScale/100;
         float camsin = sin(-_cameraAngle) * _camScale/100;
@@ -550,10 +722,10 @@ int main(int argc, char* argv[]) {
             sf::Vector2i vec = sf::Mouse::getPosition(win);
             mousePos = {(float)vec.x, (float)vec.y};
         }
-        if (!(mousePosPrev == mousePos))
-            hasMove = true;
-        Vector2f mousePosCenterRelative = mousePos-winSize.cast<float>()/2;
-        mousePosPrev = mousePos;
+        // if (!(mousePosPrev == mousePos))
+        //     hasMove = true;
+        // Vector2f mousePosCenterRelative = mousePos-winSize.cast<float>()/2;
+        // mousePosPrev = mousePos;
 
 
         sf::Event event;
@@ -582,6 +754,7 @@ int main(int argc, char* argv[]) {
                         for (std::string const &s : shape._labels) {
                             std::string key = s.substr(0, s.rfind('='));
                             std::string value = s.substr(s.rfind('=')+1);
+                            goto keepIt;
                             for (QuickMatch const &ss : toKeep) {
                                 if (key == ss.key && (ss.value == 0 || value == ss.value)) {
                                     // keep = true;
@@ -691,7 +864,7 @@ int main(int argc, char* argv[]) {
         Vector3f p2d = p2 - cameraPos;
         Vector3f p3d = p3 - cameraPos;
         Vector3f p4d = p4 - cameraPos;
-        std::cout << DEBUGVAR(cameraPos) << std::endl;
+        // std::cout << DEBUGVAR(cameraPos) << std::endl;
         if (cameraPos[2] < 0) {
             p1d[2] = std::max(p1d[2], (float)0.1);
             p2d[2] = std::max(p2d[2], (float)0.1);
@@ -719,70 +892,79 @@ int main(int argc, char* argv[]) {
 
         uniTreeBuffer->clear();
         treeZone->getColides(Zone<float, 2>(cameraBoundingBox.cast<float>()), minSizeGet, uniTreeBuffer);
-        
 
 
-        uint maxTextDraw = 16;
-        if (hasMove)
+        if (hasMove != hasMovePrev) {
             minSizeGetFactor = 1;
+        }
 
-        uint maxDisplayShape = 1024*4;
-        std::cout << DEBUGVAR(uniTreeBuffer->size()) << std::endl;
-        std::cout << DEBUGVAR(_camScale) << std::endl;
-        float delta = (float)maxDisplayShape-uniTreeBuffer->size();
-        if (std::abs(delta) > 16) {
-            std::cout << DEBUGVAR(delta) << std::endl;
-            float newMinSizeGetDelta = -delta/maxDisplayShape*minSizeGetFactor;//*_camScale;
+        // std::cout << DEBUGVAR(uniTreeBuffer->size()) << std::endl;
+        // std::cout << DEBUGVAR(_camScale) << std::endl;
+        float time = Clock.getElapsedTime().asSeconds();
+        Clock.restart();
+        float maxDisplayShape = 1.0/ (hasMove ? targetFrameRateMonving : targetFrameRate);
+        float delta = maxDisplayShape - time;
+        // uint maxDisplayShape = 1024*4;
+        // float delta = (float)maxDisplayShape-uniTreeBuffer->size();
+        if (std::abs(delta) > maxDisplayShape*0.05) {
+            // std::cout << DEBUGVAR(delta) << std::endl;
+            float newMinSizeGetDelta = -(delta > 0 ? 1 : -1)*minSizeGetFactor;//*_camScale;
             if (minSizeGetDelta * newMinSizeGetDelta < 0)
-                minSizeGetFactor /= 2;
+                minSizeGetFactor = 0.1;
             else
                 minSizeGetFactor *= 1.1;
 
             minSizeGet += newMinSizeGetDelta;
             minSizeGetDelta = newMinSizeGetDelta;
-            std::cout << DEBUGVAR(uniTreeBuffer->size()) << std::endl;
-            std::cout << DEBUGVAR(minSizeGetFactor) << std::endl;
-            std::cout << DEBUGVAR(-delta/maxDisplayShape) << std::endl;
-            std::cout << DEBUGVAR(minSizeGet) << std::endl;
+            // std::cout << DEBUGVAR(uniTreeBuffer->size()) << std::endl;
+            // std::cout << DEBUGVAR(newMinSizeGetDelta) << std::endl;
+            // std::cout << DEBUGVAR(minSizeGetFactor) << std::endl;
+            // std::cout << DEBUGVAR(minSizeGet) << std::endl;
+            // std::cout << DEBUGVAR(minSizeGet) << std::endl;
             if (minSizeGet < 0)
                 minSizeGet = 0;
         }
-        for (auto &obj : *uniTreeBuffer) {
-            auto &shape = *obj->_data;
-            sf::VertexArray lines(sf::LineStrip, shape._points.size());
-            uint i = 0;  
-            for (auto &p : shape._points) {
-                Vector3f vec3 = {p[0], p[1], -shape._height};
-                Vector3f p1 = _matWorld * vec3;
-                if (p1[2] < 0)
-                    continue;
-                p1[0] /= p1[2];
-                p1[1] /= p1[2];
-                p1 *= Vector3f{winSizef[0], winSizef[0], 0};
-                p1 += Vector3f{winSizef[0]/2, winSizef[1]/2, 0};
-                lines[i++] = sf::Vertex(sf::Vector2f(p1[0], p1[1]), shape._color);
-            }
-            lines.resize(i);
-            win.draw(lines);
 
-            if (displayLabel) {
-                Vector2f p1 = shape._points[0].cast<float>();
-                Vector3f vec3 = {p1[0], p1[1], -shape._height};
-                Vector3f p1Proj = _matWorld * vec3;
-                if (p1Proj[2] < 0)
-                    continue;
-                p1Proj[0] /= p1Proj[2];
-                p1Proj[1] /= p1Proj[2];
-                p1Proj *= Vector3f{winSizef[0], winSizef[0], 0};
-                p1Proj += Vector3f{winSizef[0]/2, winSizef[1]/2, 0};
+        {
+            uint maxTextDraw = 32;
+            std::lock_guard<std::mutex> segsMutLock(segsMut);
+            for (auto &obj : *uniTreeBuffer) {
+                auto &shape = *obj->_data;
+                sf::VertexArray lines(sf::LineStrip, shape._points.size());
+                uint i = 0;  
+                for (auto &p : shape._points) {
+                    Vector3f vec3 = p.cast<float>();
+                    Vector3f p1 = _matWorld * vec3;
+                    if (p1[2] < 0)
+                        continue;
+                    p1[0] /= p1[2];
+                    p1[1] /= p1[2];
+                    p1 *= Vector3f{winSizef[0], winSizef[0], 0};
+                    p1 += Vector3f{winSizef[0]/2, winSizef[1]/2, 0};
+                    lines[i++] = sf::Vertex(sf::Vector2f(p1[0], p1[1]), shape._color);
+                }
+                lines.resize(i);
+                win.draw(lines);
 
-                if (shape._labels.size() && maxTextDraw > 0 && 0 <= p1Proj[0] && p1Proj[0] < winSize[0] && 0 <= p1Proj[1] && p1Proj[1] < winSize[1]) {
-                    --maxTextDraw;
-                    text.setPosition(p1Proj[0], p1Proj[1]);
-                    for (std::string const &string : shape._labels) {
-                        text.setString(string);
-                        win.draw(text);
-                        text.move({0, textSize*1.1});
+                if (displayLabel) {
+                    Vector3f p1 = shape._points[0].cast<float>();
+                    Vector3f vec3 = p1;
+                    Vector3f p1Proj = _matWorld * vec3;
+                    if (p1Proj[2] < 0)
+                        continue;
+                    p1Proj[0] /= p1Proj[2];
+                    p1Proj[1] /= p1Proj[2];
+                    p1Proj *= Vector3f{winSizef[0], winSizef[0], 0};
+                    p1Proj += Vector3f{winSizef[0]/2, winSizef[1]/2, 0};
+
+                    if (shape._labels.size() && maxTextDraw > 0 && 0 <= p1Proj[0] && p1Proj[0] < winSize[0] && 0 <= p1Proj[1] && p1Proj[1] < winSize[1]) {
+                        --maxTextDraw;
+                        text.setPosition(p1Proj[0], p1Proj[1]);
+                        for (std::string const &string : shape._labels) {
+                            text.setString(string);
+                            win.draw(text);
+                            text.move({0, textSize*(float)1.1});
+                        }
                     }
                 }
             }

@@ -60,8 +60,10 @@ public:
     float a;
 };
 
+
+// work with any unsigned or signed where the sign byte is the the most left byte
 template <class T>
-void radixSort(T *toSort, size_t size, T *buffer) noexcept {
+void radixSort(T *toSort, size_t const size, T *buffer) noexcept {
     //T *buffer = (T *)malloc(size*sizeof(T));
     int const buftype = 8;
     int const bufsize = pow(2, buftype);
@@ -100,7 +102,7 @@ void radixSort(T *toSort, size_t size, T *buffer) noexcept {
 }
 
 template <class T>
-void radixSort(T *toSort, size_t size) noexcept {
+void radixSort(T *toSort, size_t const size) noexcept {
     static T *buffer = 0;
     static size_t bufferSize = 0;
     static std::mutex mutex;
@@ -113,7 +115,7 @@ void radixSort(T *toSort, size_t size) noexcept {
 
 // use offsetof(TaStruct, leNomDuTruc)
 template <class T, class U>
-void radixSortObj(T *toSort, size_t size, size_t offset_in_struct, T *buffer) noexcept {
+void radixSortObj(T *toSort, size_t const size, size_t offset_in_struct, T *buffer) noexcept {
     //T *buffer = (T *)malloc(size*sizeof(T));
     int const buftype = 8;
     int const bufsize = pow(2, buftype);
@@ -152,7 +154,7 @@ void radixSortObj(T *toSort, size_t size, size_t offset_in_struct, T *buffer) no
 
 // use offsetof(TaStruct, leNomDuTruc)
 template <class T, class U>
-void radixSortObj(T *toSort, size_t size, size_t offset_in_struct) noexcept {
+void radixSortObj(T *toSort, size_t const size, size_t offset_in_struct) noexcept {
     static T *buffer = 0;
     static size_t bufferSize = 0;
     static std::mutex mutex;
