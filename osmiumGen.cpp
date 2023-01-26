@@ -26,7 +26,7 @@
 */
 
 #define PY_SSIZE_T_CLEAN
-#include <Python.h>
+// #include <Python.h>
 #include <stdlib.h>
 
 #include <curlpp/cURLpp.hpp>
@@ -456,7 +456,7 @@ int main(int argc, char* argv[]) {
             segIt = segs.begin();
             pIt = segIt->_points.begin();
         }
-        uint const threadsCount = 2;
+        uint const threadsCount = 8;
         int const requestCount = 128;
         int aliveThreads = threadsCount;
 
@@ -469,19 +469,20 @@ int main(int argc, char* argv[]) {
     };
 
 
-    setenv("PYTHONPATH",".",1);
-    Py_Initialize();
-    PyObject *pFileName, *pModule, *pDict, *presult, *pValue;
+    // setenv("PYTHONPATH",".",1);
+    // Py_Initialize();
+    // PyObject *pFileName, *pModule, *pDict, *presult, *pValue;
 
-    pFileName = PyUnicode_FromString((char *)"elevation");
-    pModule = PyImport_Import(pFileName);
-    pDict = PyModule_GetDict(pModule);
+    // pFileName = PyUnicode_FromString((char *)"elevation");
+    // pModule = PyImport_Import(pFileName);
+    // pDict = PyModule_GetDict(pModule);
 
-    PyObject *pFunc = PyDict_GetItemString(pDict, (char*)"lookUpElevation");
+    // PyObject *pFunc = PyDict_GetItemString(pDict, (char*)"lookUpElevation");
 
 
     std::unique_ptr<ThreadShared> threadShared = std::make_unique<ThreadShared>(segs);
 
+    std::thread *threads[threadShared->threadsCount];
 
     if (1) { // get the height map
         int pCount = 0; // number of point in the graph
@@ -501,10 +502,9 @@ int main(int argc, char* argv[]) {
 
         std::cout << "fetching elevation" << std::endl;
 
-        std::thread *threads[threadShared->threadsCount];
         for (uint threadId = 0; threadId < threadShared->threadsCount; threadId++) {
             threads[threadId] = new std::thread(
-            [&threads, &threadShared, &segs, pCount, requestBuffer, &segsMut, &pFileName, &pModule, &pDict, &presult, &pValue, pFunc](){
+            [&threads, &threadShared, &segs, pCount, requestBuffer, &segsMut](){
                 int const &requestCount = threadShared->requestCount;
                 std::mutex &iteratorMut = threadShared->iteratorMut;
                 bool &finish = threadShared->finish;
@@ -513,7 +513,7 @@ int main(int argc, char* argv[]) {
                 auto &currentOffset = threadShared->currentOffset;
                 auto &heightmoy = threadShared->heightmoy;
                 auto &aliveThreads = threadShared->aliveThreads;
-                auto const &threadsCount = threadShared->threadsCount;
+                // auto const &threadsCount = threadShared->threadsCount;
 
 
                 Vector3f buf[requestCount];
@@ -521,7 +521,7 @@ int main(int argc, char* argv[]) {
                 auto lpIt = pIt;
 
                 while (1) {
-                    uint count = 0;
+                    int count = 0;
                     {
                         std::lock_guard<std::mutex> const lockable(iteratorMut);
                         lsegIt = segIt;
@@ -542,31 +542,32 @@ int main(int argc, char* argv[]) {
                             }
                         }
                         // copy data in buffer                
-                        for (uint i = 0; i < count; i++)
+                        for (int i = 0; i < count; i++)
                             buf[i] = (*requestBuffer)[currentOffset++];
                     }
-
                     
-                    // curlpp::Cleanup myCleanup;
-                    // curlpp::Easy myRequest;
-                    // std::string requestString = "127.0.0.1:8080/api/v1/lookup?locations=";
-                    // for (uint i = 0; i < count; i++) {
-                    //     if (i) requestString += "|";
-                    //     requestString += std::to_string(buf[i][1]) + "," + std::to_string(buf[i][0]);
-                    // }
-                    // myRequest.setOpt<curlpp::options::Url>(requestString);
-                    // std::stringstream ss;
-                    // ss << myRequest;
-                    // nlohmann::json data = nlohmann::json::parse(ss.str());
+                    curlpp::Cleanup myCleanup;
+                    curlpp::Easy myRequest;
+                    std::string requestString = "127.0.0.1:8080/api/v1/lookup?locations=";
+                    for (int i = 0; i < count; i++) {
+                        if (i) requestString += "|";
+                        requestString += std::to_string(buf[i][1]) + "," + std::to_string(buf[i][0]);
+                    }
+                    myRequest.setOpt<curlpp::options::Url>(requestString);
+                    std::stringstream ss;
+                    ss << myRequest;
+                    nlohmann::json data = nlohmann::json::parse(ss.str());
 
                     { // data in segs
                         // std::lock_guard<std::mutex> const lockable(segsMut);
-                        for (uint i = 0; i < count; i++) {
-                            std::cout << "build value" << std::endl;
-                            pValue = Py_BuildValue("f f", buf[i][1], buf[i][0]);
-                            presult = PyObject_CallObject(pFunc, pValue);
-                            (*lpIt)[2] -= (double)PyFloat_AS_DOUBLE(presult);
-                            heightmoy += (*lpIt)[2];
+                        for (int i = 0; i < count; i++) {
+                            // pValue = Py_BuildValue("f f", buf[i][1], buf[i][0]);
+                            // presult = PyObject_CallObject(pFunc, pValue);
+                            // (*lpIt)[2] -= (double)PyFloat_AS_DOUBLE(presult);
+                            // heightmoy += data[] (*lpIt)[2];
+                            double d = (double)data["results"][i]["elevation"];
+                            (*lpIt)[2] -= d;
+                            heightmoy += d;
                             lpIt++;
                             if (lpIt == lsegIt->_points.end()) {
                                 lsegIt->_color.a = 255; 
