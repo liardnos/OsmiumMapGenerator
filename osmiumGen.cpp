@@ -484,7 +484,7 @@ int main(int argc, char* argv[]) {
 
     std::thread *threads[threadShared->threadsCount];
 
-    if (1) { // get the height map
+    if (0) { // get the height map
         int pCount = 0; // number of point in the graph
         for (auto &seg : segs) {
             pCount += seg._points.size();
